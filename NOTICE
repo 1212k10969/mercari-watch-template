@@ -1,0 +1,11 @@
+Upstream: https://github.com/1212k10969/mercari-watch-template
+Baseline: 5a19a755a758b36f5bce2d3e1dc3e20f146c7e44
+
+The upstream baseline did not include an explicit license. Existing upstream
+authorship and rights are retained. The scoped MIT license in LICENSE covers
+only this fork's original additions and modifications; it does not constitute
+permission from upstream authors to relicense their material.
+
+Mercari, Discord, LINE, and GitHub names identify the services integrated by
+this independent project. Product content and images belong to their respective
+owners. No affiliation or endorsement is claimed.

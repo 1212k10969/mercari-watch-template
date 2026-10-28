@@ -5,5 +5,9 @@ __pycache__/
 .env.*
 !.env.example
 seen.json
+.state/
+*.enc
+playwright-report/
+test-results/
 .DS_Store
 

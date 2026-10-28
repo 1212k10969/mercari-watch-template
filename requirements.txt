@@ -1,2 +1,6 @@
 mercapi>=0.4.2,<0.6
+httpx>=0.28,<0.29
+python-dotenv>=1.0,<2
+cryptography>=44,<51
+playwright>=1.50,<2
 

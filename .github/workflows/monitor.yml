@@ -6,6 +6,10 @@ on:
         description: 發送一則純文字 LINE 連線測試
         type: boolean
         default: false
+      test_discord:
+        description: 發送一則純文字 Discord 連線測試
+        type: boolean
+        default: false
   schedule:
     - cron: '7,37 * * * *'
 permissions:
@@ -17,9 +21,7 @@ jobs:
   monitor:
     if: github.event_name == 'workflow_dispatch' || vars.MONITOR_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,28 +29,43 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python -m unittest -q
+      - name: Install search browser
+        if: ${{ !inputs.test_line && !inputs.test_discord }}
+        run: python -m playwright install --with-deps chromium
+      - name: Restore encrypted monitor state
+        if: ${{ !inputs.test_line && !inputs.test_discord }}
+        uses: actions/cache/restore@v4
+        with:
+          path: .state/seen.enc
+          key: ${{ runner.os }}-mercari-private-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ runner.os }}-mercari-private-state-v1-
       - name: Check once
-        if: ${{ !inputs.test_line }}
+        id: monitor
+        if: ${{ !inputs.test_line && !inputs.test_discord }}
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          WATCHLIST_JSON: ${{ secrets.WATCHLIST_JSON }}
+          MONITOR_STATE_KEY: ${{ secrets.MONITOR_STATE_KEY }}
+          MONITOR_STATE_PATH: .state/seen.enc
         run: python mercari_watch.py --once
       - name: Test LINE
+        id: test_line
         if: ${{ inputs.test_line }}
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
         run: python mercari_watch.py --test-line
-      - name: Save state
-        if: ${{ always() && !inputs.test_line }}
-        run: |
-          if [ -f seen.json ]; then
-            git add -f seen.json
-            if ! git diff --cached --quiet; then
-              git -c user.name='github-actions[bot]' -c user.email='41898313+github-actions[bot]@users.noreply.github.com' commit -m 'Update monitor state [skip ci]'
-              git pull --rebase origin "$GITHUB_REF_NAME"
-              git push origin "HEAD:$GITHUB_REF_NAME"
-            fi
-          fi
+      - name: Test Discord
+        if: ${{ !cancelled() && inputs.test_discord && (success() || steps.test_line.outcome == 'failure') }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python mercari_watch.py --test-discord
+      - name: Save encrypted monitor state
+        if: ${{ always() && (steps.monitor.outcome == 'success' || steps.monitor.outcome == 'failure') && hashFiles('.state/seen.enc') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .state/seen.enc
+          key: ${{ runner.os }}-mercari-private-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
