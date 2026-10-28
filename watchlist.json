@@ -1,0 +1,16 @@
+[
+  {
+    "id": "",
+    "name": "",
+    "keyword": "",
+    "keywords": [],
+    "price_min": null,
+    "price_max": null,
+    "must_match": [],
+    "must_not_match": [],
+    "include_auctions": true,
+    "review_note": "",
+    "enabled": false
+  }
+]
+
