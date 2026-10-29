@@ -32,9 +32,10 @@ from mercapi import Mercapi
 from mercapi.requests.search import SearchRequestData
 from market_sources import TaiwanSearch
 from yahoo_sources import YahooSearch
+from surugaya_source import SurugayaSearch
 
 BASE = Path(__file__).parent
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 WATCHLIST = BASE / "watchlist.json"
 SEEN = BASE / "seen.json"
 SEEN_KEEP = 500          # 每組條件最多記住幾個 ID
@@ -51,7 +52,8 @@ AUCTION_COLOR = "#B45309"
 DEFAULT_WEBHOOK_ENV = "DISCORD_WEBHOOK_URL"
 WEBHOOK_ENV_PATTERN = r"DISCORD_WEBHOOK_URL(?:_[A-Z0-9_]+)?"
 SOURCE_LABELS = {"jp": "Mercari 日本站", "tw": "Mercari 台灣入口",
-                 "yahoo_fleamarket": "Yahoo!フリマ", "yahoo_auctions": "Yahoo!オークション"}
+                 "yahoo_fleamarket": "Yahoo!フリマ", "yahoo_auctions": "Yahoo!オークション",
+                 "surugaya": "駿河屋日本站"}
 
 
 # ---------- 搜尋 ----------
@@ -111,9 +113,9 @@ async def search_new(m: Mercapi, w: dict, taiwan=None, external=None):
         if index:
             await asyncio.sleep(DELAY_BETWEEN)
         source = w.get("source", "jp")
-        if source in ("yahoo_fleamarket", "yahoo_auctions"):
+        if source in ("yahoo_fleamarket", "yahoo_auctions", "surugaya"):
             if external is None:
-                async with YahooSearch(source) as client:
+                async with (SurugayaSearch() if source == "surugaya" else YahooSearch(source)) as client:
                     items = await client.search(keyword)
             else:
                 items = await external[source].search(keyword)
@@ -157,6 +159,8 @@ def to_record(it, w: dict) -> dict:
         "thumbnail": (it.thumbnails or [None])[0],
         "is_auction": is_auction(it),
         "review_note": w.get("review_note", ""),
+        "price_note": getattr(it, "price_note", ""),
+        "price_from": getattr(it, "price_from", False),
         "bid_deadline": None,
         "total_bid": None,
     }
@@ -176,7 +180,7 @@ def _text(text, **kw) -> dict:
 
 
 def price_label(x: dict) -> str:
-    return ("NT$" if x.get("currency") == "TWD" else "¥") + f"{x['price']:,}"
+    return ("NT$" if x.get("currency") == "TWD" else "¥") + f"{x['price']:,}" + (" 起" if x.get("price_from") else "")
 
 
 def mercari_link_mode() -> str:
@@ -211,6 +215,8 @@ def bubble(x: dict) -> dict:
     ]
     if x.get("review_note"):
         body.append(_text(x["review_note"], size="xxs", color="#888888", wrap=True))
+    if x.get("price_note"):
+        body.append(_text(x["price_note"], size="xxs", color="#888888", wrap=True))
     if x["is_auction"]:
         bids = f"・{x['total_bid']} 次出價" if x.get("total_bid") is not None else ""
         body += [
@@ -326,7 +332,7 @@ def build_discord_messages(items: list[dict]) -> list[dict]:
         links = notification_links(x)
         labels = {**SOURCE_LABELS, "item": "查看商品", "buyee": "Buyee 商品頁"}
         link_text = " · ".join(f"[{labels.get(source, '查看商品')}]({url})" for source, url in links.items())
-        description = "\n".join(filter(None, [str(x["watch"]), str(x.get("review_note") or "")]))
+        description = "\n".join(filter(None, [str(x["watch"]), str(x.get("review_note") or ""), str(x.get("price_note") or "")]))
         description = description[:max(0, 4096 - len(link_text) - 2)] + "\n\n" + link_text
         embed = {
             "title": str(x["name"])[:256] or "(無標題)",
@@ -534,8 +540,9 @@ async def check_once(dry_run: bool = False) -> int:
     baseline_records = {}
     source_outcomes = {}
 
-    async with TaiwanSearch() as taiwan, YahooSearch("yahoo_fleamarket") as fleamarket, YahooSearch("yahoo_auctions") as auctions:
-        external = {"yahoo_fleamarket": fleamarket, "yahoo_auctions": auctions}
+    async with (TaiwanSearch() as taiwan, YahooSearch("yahoo_fleamarket") as fleamarket,
+                YahooSearch("yahoo_auctions") as auctions, SurugayaSearch() as surugaya):
+        external = {"yahoo_fleamarket": fleamarket, "yahoo_auctions": auctions, "surugaya": surugaya}
         for w in active:
             wid = w["id"]
             route = webhook_env_for(w)
@@ -579,6 +586,8 @@ async def check_once(dry_run: bool = False) -> int:
                     if identity in route_candidates:
                         route_candidates[identity] = merge_records(route_candidates[identity], to_record(it, w))
                     elif not first_run and identity not in known:
+                        if source == "surugaya" and not dry_run:
+                            await surugaya.prepare_item(it)
                         route_candidates[identity] = to_record(it, w)
                     known.add(identity)
                 previous_ids = new_seen.get(wid, [])

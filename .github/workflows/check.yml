@@ -5,6 +5,11 @@ on:
     paths-ignore: [seen.json]
   pull_request:
   workflow_dispatch:
+    inputs:
+      surugaya_probe:
+        description: Verify the Japanese storefront from the runner, without private rules or notifications
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -19,4 +24,29 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python -m unittest -q
+      - name: Install Japanese storefront browser
+        if: ${{ inputs.surugaya_probe }}
+        run: python -m patchright install --with-deps chrome
+      - name: Verify Japanese storefront access
+        if: ${{ inputs.surugaya_probe }}
+        run: |
+          xvfb-run -a python - <<'PY'
+          import asyncio
+          from surugaya_source import SurugayaSearch
+          async def probe():
+              async with SurugayaSearch() as source:
+                  items = await source.search('Nintendo Switch')
+                  if not items:
+                      raise RuntimeError('Expected public search results')
+                  await source.prepare_item(items[0])
+                  if not items[0].thumbnails:
+                      raise RuntimeError('Public product image was not confirmed')
+                  import httpx
+                  async with httpx.AsyncClient() as client:
+                      response = await client.get(items[0].thumbnails[0])
+                      if response.status_code != 200 or not response.headers.get('content-type', '').startswith('image/'):
+                          raise RuntimeError('Public product image was not accessible')
+                  print(f'Japanese storefront verified: {len(items)} direct offers')
+          asyncio.run(probe())
+          PY
 

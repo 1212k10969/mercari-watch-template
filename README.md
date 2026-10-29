@@ -1,11 +1,12 @@
 # Mercari 商品監控
 
-監聽 Mercari 日本站、台灣入口、Yahoo!フリマ與 Yahoo!オークション的新上架商品，透過 Discord、LINE 或兩者同時通知。搜尋使用最新排序與販賣中篩選，依來源商品編號合併結果。
+監聽 Mercari 日本站、台灣入口、Yahoo!フリマ與 Yahoo!オークション的新上架商品，並提供駿河屋日本站來源，透過 Discord、LINE 或兩者同時通知。搜尋使用最新排序與販賣中篩選，依來源商品編號合併結果。
 
 - Discord 通知包含商品名稱、商品大圖、可點擊的商品連結與來源幣別價格。
 - 同件商品跨關鍵字、跨站與跨輪次去重；每個通知目的地獨立記錄。不同賣家或不同刊登編號視為不同商品。
 - 台灣站獨立讀取搜尋頁，使用「顯示可購買的商品」及「新商品」，不以日本站結果代替。
 - Yahoo!フリマ驗證服務端的最新排序及販售中條件；Yahoo!オークション驗證最新刊登順序與剩餘時間。兩站的重複刊登使用相同 ID；拍賣顯示目前價格及結標時間。
+- 駿河屋只使用 `www.suruga-ya.jp`，選「更新の新しい順」及「品切れ OFF」，確認本店售價後才通知；不同品況分開記錄，價格區間標示為起價。
 - 私人搜尋條件從 `.env` 或 GitHub Secrets 載入，公開的 `watchlist.json` 保持空白範本。
 - 已看紀錄加密保存，不提交商品編號、搜尋條件或執行紀錄到 Git。
 
@@ -18,6 +19,8 @@ python -m venv .venv
 # 啟用虛擬環境後：
 python -m pip install -r requirements.txt
 python -m playwright install chromium
+# 使用駿河屋且沒有安裝 Edge / Chrome 時：
+python -m patchright install chrome
 ```
 
 將 `.env.example` 複製為 `.env`。環境變數優先於檔案；程式不會覆蓋已設定的變數。
@@ -28,6 +31,7 @@ python -m playwright install chromium
 | `DISCORD_WEBHOOK_URL` | Discord incoming Webhook 網址；使用 Discord 時設定 |
 | `DISCORD_WEBHOOK_URL_SECONDARY` | 可選的獨立 Discord 通道；只接收指定給它的條件 |
 | `MERCARI_LINK_MODE` | `original`（預設）或 `buyee`；後者將 Mercari 商品的通知主連結改為 Buyee 商品頁 |
+| `SURUGAYA_BROWSER_CHANNEL` | 選用；Windows 預設 `msedge`、Linux 預設 `chrome`。駿河屋使用獨立的有頭瀏覽器，Linux 需桌面或 Xvfb |
 | `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_USER_ID` | 使用 LINE 時須同時設定 |
 | `MONITOR_STATE_KEY` | Fernet 加密金鑰；正式保存紀錄必填 |
 | `MONITOR_STATE_PATH` | 加密紀錄位置，預設 `.state/seen.enc` |
@@ -50,7 +54,7 @@ WATCHLIST_JSON='[{"id":"watch-1","name":"商品A","keyword":"範例商品","keyw
 | `name` | 通知顯示名稱 |
 | `keyword` | 主要搜尋詞，必填 |
 | `keywords` | 搜尋詞陣列，逐一搜尋後合併；空陣列使用 `keyword` |
-| `sources` | 可選 `jp`、`tw`、`yahoo_fleamarket`、`yahoo_auctions`；省略時維持 Mercari 日本站 |
+| `sources` | 可選 `jp`、`tw`、`yahoo_fleamarket`、`yahoo_auctions`、`surugaya`；省略時維持 Mercari 日本站 |
 | `source_keywords` | 為啟用的來源分別指定搜尋詞陣列，避免每個網站都搜尋全部同義詞 |
 | `discord_webhook_env` | Discord 目的地環境變數名稱；省略使用 `DISCORD_WEBHOOK_URL` |
 | `price_min` / `price_max` | 日圓價格篩選；使用 `tw` 的條件請留 `null`，避免將台幣與日圓混用 |
@@ -92,9 +96,15 @@ Yahoo 新增來源同樣首次只建立基準，不重播既有商品。搜尋�
 
 ## 台灣比價評估
 
-監聽與去重不使用語言模型，排程執行不消耗 AI token。到手成本計算與可靠商品編號配對也能由一般程式完成；目前尚未啟用自動台灣市場比價。計算方式、資料配對限制與分階段建議見 [比價評估](PRICE_COMPARISON.md)。
+目前只有監聽、標題條件篩選與相同刊登 ID 去重，沒有實作跨市場商品配對、台灣價格擷取、圖片辨識或到手價計算。監聽不呼叫模型，不能據此推論收藏品比價可可靠地以零 token 完成。比價需要核對系列、版別、品況、數量與配件；圖文 AI 也須以真實案例驗證，資料不足時保留未知。現有測試未驗證跨市場配對品質；修正後的方案與實作狀態見 [比價評估](PRICE_COMPARISON.md)。
 
-駿河屋仍列為待接來源：目前公開搜尋請求回傳 HTTP 403／驗證頁，尚未取得可驗證的即時搜尋資料，因此沒有將它加入正式監聽。可先使用其官方入荷待ち通知；[官方說明](https://www.suruga-ya.jp/man/rule/mypage_text.html)。
+## 駿河屋日本站
+
+`surugaya` 使用 [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python) 與獨立瀏覽器 profile，已在本機 Edge 讀取原生搜尋頁。一般 HTTP 與普通無頭瀏覽器可能收到驗證頁；首頁能開啟不代表搜尋、排序、庫存與圖片皆可用。使用前可手動執行 Check workflow 的 `surugaya_probe`，從實際 runner 驗證搜尋與公開圖片；通過前不要假設 GitHub 雲端也能連線。
+
+監聽「更新的商品」，不等同首次上市；只處理本次載入的搜尋頁。網站的「品切れ OFF」仍可能包含本店缺貨但其他賣家有貨的商品，因此程式另外確認本店新品／中古售價，略過第三方獨有商品與預約品。不將定價、運費門檻、手續費或第三方最低價當作本店售價。區間價標示「起」，不同分支品況與新品／中古使用不同 ID；它們仍需人工核對內容。尚未驗證的限時特價版型會回報來源失敗，保留既有紀錄。
+
+圖片入口可能受驗證保護；只在商品需要通知時，沿網站實際圖片重新導向取得公開 CDN 網址，不猜圖片路徑。無法確認圖片時保留名稱與連結。瀏覽器 profile 保存在 `.state/surugaya-browser/`，包含瀏覽紀錄與網站 cookie，僅留本機，不提交或上傳 Actions Cache。雲端只保存原有加密去重檔；每次新 runner 都必須重新通過網站檢查。來源失敗不會變成零商品，也不建立假的基準；不保證永遠能通過驗證。不需模型 API、付費代理或解驗證服務。
 
 ## GitHub Actions 排程
 
@@ -112,7 +122,7 @@ Discord Webhook 基本功能不需 Nitro。公開專案使用標準 GitHub-hoste
 
 ## 資料與限制
 
-搜尋只處理本次回傳／頁面已載入的商品，不保證即時或完整涵蓋。標題篩選不辨識圖片，也不保證商品真偽、內容、庫存或跨境購買資格。程式不登入 Mercari、不使用代理、不解驗證。
+搜尋只處理本次回傳／頁面已載入的商品，不保證即時或完整涵蓋。標題篩選不辨識圖片，也不保證商品真偽、內容、庫存或跨境購買資格。程式不登入商品平台，不使用付費代理或第三方解驗證服務。
 
 本機 `.env`、`.state/`、執行紀錄與真實商品資料不得提交。公開範例、測試、README、版本說明與標籤均不包含個人搜尋內容。不要將私人條件放入 GitHub Variables、issue、commit 或 workflow 輸入。
 

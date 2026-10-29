@@ -9,3 +9,8 @@ permission from upstream authors to relicense their material.
 Mercari, Discord, LINE, and GitHub names identify the services integrated by
 this independent project. Product content and images belong to their respective
 owners. No affiliation or endorsement is claimed.
+
+The Suruga-ya integration depends on Patchright Python (Apache-2.0):
+https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python
+The dependency's own license applies to its distribution; this fork's scoped
+MIT license does not relicense that dependency or third-party product content.

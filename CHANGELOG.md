@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+- Add the Japanese Suruga-ya storefront using Patchright and a dedicated browser profile.
+- Verify native updated-first ordering and sold-out exclusion, then retain confirmed direct-store offers.
+- Separate condition branches and new/used identities; label price ranges and exclude reservation or marketplace-only goods.
+- Resolve actual public CDN image redirects before notifications; preserve names and links if images are unavailable.
+- Add an optional runner probe without private search rules or notification credentials.
+- Correct the comparison assessment: semantic product matching, Taiwan price extraction and landed-cost calculation are not implemented.
+- Describe evidence-based multimodal matching and abstention instead of claiming unmeasured zero-token matching quality.
+
 ## 0.3.1
 
 - Add an optional Buyee destination for Mercari notification titles and LINE buttons.

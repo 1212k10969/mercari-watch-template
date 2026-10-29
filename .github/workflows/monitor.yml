@@ -31,7 +31,9 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Install search browser
         if: ${{ !inputs.test_line && !inputs.test_discord }}
-        run: python -m playwright install --with-deps chromium
+        run: |
+          python -m playwright install --with-deps chromium
+          python -m patchright install --with-deps chrome
       - name: Restore encrypted monitor state
         if: ${{ !inputs.test_line && !inputs.test_discord }}
         uses: actions/cache/restore@v4
@@ -51,7 +53,7 @@ jobs:
           WATCHLIST_JSON: ${{ secrets.WATCHLIST_JSON }}
           MONITOR_STATE_KEY: ${{ secrets.MONITOR_STATE_KEY }}
           MONITOR_STATE_PATH: .state/seen.enc
-        run: python mercari_watch.py --once
+        run: xvfb-run -a python mercari_watch.py --once
       - name: Test LINE
         id: test_line
         if: ${{ inputs.test_line }}
