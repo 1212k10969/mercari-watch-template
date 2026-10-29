@@ -16,6 +16,8 @@ jobs:
   test:
     runs-on: ${{ inputs.surugaya_probe && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: 5
+    env:
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
