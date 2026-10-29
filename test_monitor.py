@@ -496,6 +496,41 @@ class MonitorTests(unittest.TestCase):
         send.assert_called_once()
         self.assertEqual([record["item_id"] for record in send.call_args.args[0]], [new.id_])
 
+    def test_buyee_mode_changes_display_links_and_preserves_original_identity(self):
+        original = "https://jp.mercari.com/item/m100"
+        rec = app.to_record(item("m100", url=original, thumbnails=["https://example.org/photo.jpg"]), watch())
+        with patch.dict(os.environ, {"MERCARI_LINK_MODE": "buyee"}):
+            expected = "https://buyee.jp/mercari/item/m100"
+            embed = app.build_discord_messages([rec])[0]["embeds"][0]
+            self.assertEqual(embed["url"], expected)
+            self.assertLess(embed["description"].index("Buyee"), embed["description"].index("Mercari"))
+            self.assertIn(original, embed["description"])
+            self.assertIn({"name": "日本商品編號", "value": "m100", "inline": True}, embed["fields"])
+            card = app.bubble(rec)
+            self.assertEqual(card["footer"]["contents"][0]["action"]["uri"], expected)
+            self.assertEqual(card["hero"]["action"]["uri"], expected)
+        self.assertEqual(rec["item_id"], "m100")
+        self.assertEqual(rec["url"], original)
+        self.assertEqual(rec["links"], {"jp": original})
+        self.assertEqual(app.notification_url(rec), original)
+
+    def test_buyee_mode_requires_verified_mercari_identity(self):
+        with patch.dict(os.environ, {"MERCARI_LINK_MODE": "buyee"}):
+            for it in (item("yahoo_auctions:a100", source="yahoo_auctions", url="https://auctions.yahoo.co.jp/jp/auction/a100"),
+                       item("abc123", item_type="ITEM_TYPE_BEYOND"),
+                       item("tw:abc123", currency="TWD", url="https://tw.mercari.com/zh-hant/items/abc123")):
+                rec = app.to_record(it, watch())
+                self.assertEqual(app.notification_url(rec), rec["url"])
+                self.assertNotIn("buyee", app.notification_links(rec))
+            tw = app.to_record(item("m100", currency="TWD", url="https://tw.mercari.com/zh-hant/items/example"), watch())
+            self.assertEqual(app.notification_url(tw), "https://buyee.jp/mercari/item/m100")
+
+    def test_invalid_link_mode_fails_before_search(self):
+        with patch.dict(os.environ, {"MERCARI_LINK_MODE": "unsupported"}), patch.object(app, "Mercapi") as client:
+            with self.assertRaises(ValueError):
+                self.run_check()
+            client.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

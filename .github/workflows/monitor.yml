@@ -47,6 +47,7 @@ jobs:
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
+          MERCARI_LINK_MODE: ${{ secrets.MERCARI_LINK_MODE }}
           WATCHLIST_JSON: ${{ secrets.WATCHLIST_JSON }}
           MONITOR_STATE_KEY: ${{ secrets.MONITOR_STATE_KEY }}
           MONITOR_STATE_PATH: .state/seen.enc

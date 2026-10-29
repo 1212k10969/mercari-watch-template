@@ -23,6 +23,7 @@ import time
 import uuid
 from datetime import timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
@@ -33,7 +34,7 @@ from market_sources import TaiwanSearch
 from yahoo_sources import YahooSearch
 
 BASE = Path(__file__).parent
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 WATCHLIST = BASE / "watchlist.json"
 SEEN = BASE / "seen.json"
 SEEN_KEEP = 500          # 每組條件最多記住幾個 ID
@@ -178,6 +179,31 @@ def price_label(x: dict) -> str:
     return ("NT$" if x.get("currency") == "TWD" else "¥") + f"{x['price']:,}"
 
 
+def mercari_link_mode() -> str:
+    mode = os.environ.get("MERCARI_LINK_MODE", "").strip() or "original"
+    if mode not in ("original", "buyee"):
+        raise ValueError("MERCARI_LINK_MODE must be original or buyee")
+    return mode
+
+
+def notification_links(x: dict) -> dict:
+    links = dict(x.get("links") or {"item": x["url"]})
+    identity = x.get("item_id", "")
+    if isinstance(identity, str) and re.fullmatch(r"m\d+", identity) and any(
+            urlparse(url).hostname in ("jp.mercari.com", "tw.mercari.com") for url in links.values()):
+        # Official Mercari item pages link to this same Buyee item route.
+        links.setdefault("jp", "https://jp.mercari.com/item/" + identity)
+        links["buyee"] = "https://buyee.jp/mercari/item/" + identity
+        if mercari_link_mode() == "buyee":
+            links = {"buyee": links.pop("buyee"), **links}
+    return links
+
+
+def notification_url(x: dict) -> str:
+    links = notification_links(x)
+    return links.get("buyee", x["url"]) if mercari_link_mode() == "buyee" else x["url"]
+
+
 def bubble(x: dict) -> dict:
     body = [
         _text(x["watch"], size="xxs", color="#888888"),
@@ -200,13 +226,13 @@ def bubble(x: dict) -> dict:
         "body": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": body},
         "footer": {"type": "box", "layout": "vertical", "contents": [{
             "type": "button", "style": "primary", "height": "sm", "color": ACCENT,
-            "action": {"type": "uri", "label": "查看商品", "uri": x["url"]},
+            "action": {"type": "uri", "label": "查看商品", "uri": notification_url(x)},
         }]},
     }
     if x.get("thumbnail", "") and str(x["thumbnail"]).startswith("https://"):
         b["hero"] = {"type": "image", "url": x["thumbnail"], "size": "full",
                      "aspectRatio": "1:1", "aspectMode": "cover",
-                     "action": {"type": "uri", "uri": x["url"]}}
+                     "action": {"type": "uri", "uri": notification_url(x)}}
     return b
 
 
@@ -297,14 +323,14 @@ def build_discord_messages(items: list[dict]) -> list[dict]:
     """商品卡片依 Discord 的 10 embeds / 6000 字元上限分批。"""
     messages, embeds, characters = [], [], 0
     for x in items:
-        links = x.get("links") or {"item": x["url"]}
-        labels = {**SOURCE_LABELS, "item": "查看商品"}
+        links = notification_links(x)
+        labels = {**SOURCE_LABELS, "item": "查看商品", "buyee": "Buyee 商品頁"}
         link_text = " · ".join(f"[{labels.get(source, '查看商品')}]({url})" for source, url in links.items())
         description = "\n".join(filter(None, [str(x["watch"]), str(x.get("review_note") or "")]))
         description = description[:max(0, 4096 - len(link_text) - 2)] + "\n\n" + link_text
         embed = {
             "title": str(x["name"])[:256] or "(無標題)",
-            "url": x["url"],
+            "url": notification_url(x),
             "description": description,
             "color": int((AUCTION_COLOR if x["is_auction"] else ACCENT)[1:], 16),
             "fields": [{"name": "拍賣目前價格" if x["is_auction"] else "價格",
@@ -312,6 +338,8 @@ def build_discord_messages(items: list[dict]) -> list[dict]:
         }
         if not embed["description"]:
             del embed["description"]
+        if "buyee" in links:
+            embed["fields"].append({"name": "日本商品編號", "value": str(x["item_id"]), "inline": True})
         if x["is_auction"]:
             embed["fields"].append({"name": "截止（台灣時間）",
                                      "value": x.get("bid_deadline") or "未提供", "inline": True})
@@ -479,6 +507,7 @@ async def check_once(dry_run: bool = False) -> int:
     if not active:
         print("尚未啟用商品設定；不搜尋、不通知。")
         return 0
+    mercari_link_mode()
     if not dry_run and SEEN.suffix == ".enc":
         key = os.environ.get("MONITOR_STATE_KEY", "").strip()
         if not key:

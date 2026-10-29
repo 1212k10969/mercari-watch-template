@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Add an optional Buyee destination for Mercari notification titles and LINE buttons.
+- Preserve original listing links, copyable item IDs and existing deduplication history.
+- Leave Yahoo, Shops and listings without a verified original Mercari ID on their source URLs.
+
 ## 0.3.0
 
 - Add public Yahoo! Fleamarket and Yahoo! Auctions searches with verified newest and active filters.

@@ -27,6 +27,7 @@ python -m playwright install chromium
 | `WATCHLIST_JSON` | 私人監聽條件的 JSON 陣列；`[]` 停用監聽 |
 | `DISCORD_WEBHOOK_URL` | Discord incoming Webhook 網址；使用 Discord 時設定 |
 | `DISCORD_WEBHOOK_URL_SECONDARY` | 可選的獨立 Discord 通道；只接收指定給它的條件 |
+| `MERCARI_LINK_MODE` | `original`（預設）或 `buyee`；後者將 Mercari 商品的通知主連結改為 Buyee 商品頁 |
 | `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_USER_ID` | 使用 LINE 時須同時設定 |
 | `MONITOR_STATE_KEY` | Fernet 加密金鑰；正式保存紀錄必填 |
 | `MONITOR_STATE_PATH` | 加密紀錄位置，預設 `.state/seen.enc` |
@@ -82,6 +83,8 @@ python -m unittest -q
 4. 將接收頻道通知設為「所有訊息」，開啟 Discord 與手機系統的通知權限。
 
 商品圖片由商品來源提供；缺少圖片時仍保留名稱與連結。兩站皆找到相同商品時合併連結。台灣站以新台幣顯示，日本站以日圓顯示，不自行推算匯率。圖片與商品內容需自行核對。
+
+Mercari 原站可能因瀏覽器、帳號或 App 開啟方式轉往當地入口。若使用 Buyee，可在 `.env` 與 GitHub 同名 Secret 設定 `MERCARI_LINK_MODE=buyee`，讓 Discord 商品標題與 LINE 查看按鈕直接開啟 Buyee；通知也保留日本原始連結與可複製的日本商品編號。這會選擇另一個商品入口，並不更改 Mercari 的地區設定。Yahoo、Mercari Shops 或無法取得日本原始編號的商品維持原連結；去重紀錄不受影響。
 
 `tw.mercari.com` 是跨境商品入口，並非台灣本地現貨市場；其台幣標價不能視為已包含全部跨境費用的到手價。不同賣家刊登同款商品仍分別通知，不以名稱相似判定同一件貨品。
 
