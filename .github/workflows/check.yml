@@ -10,6 +10,10 @@ on:
         description: Verify the Japanese storefront from the runner, without private rules or notifications
         type: boolean
         default: false
+      taiwan_probe:
+        description: Diagnose Taiwan storefront loading with a public sample, without private rules or notifications
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -26,7 +30,45 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python -m unittest -q
-        if: ${{ !inputs.surugaya_probe }}
+        if: ${{ !inputs.surugaya_probe && !inputs.taiwan_probe }}
+      - name: Install Taiwan probe browser
+        if: ${{ inputs.taiwan_probe }}
+        run: python -m playwright install --with-deps chromium
+      - name: Diagnose Taiwan storefront access
+        if: ${{ inputs.taiwan_probe }}
+        shell: python
+        run: |
+          import asyncio
+          import json
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path.cwd()))
+          from playwright.async_api import async_playwright
+          from market_sources import EXTRACT_SEARCH, parse_taiwan_results, taiwan_search_url
+          async def probe():
+              async with async_playwright() as engine:
+                  browser = await engine.chromium.launch(headless=True, channel='chromium')
+                  try:
+                      agent = f'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{browser.version} Safari/537.36'
+                      page = await browser.new_page(locale='zh-TW', user_agent=agent)
+                      stage = 'navigation'
+                      try:
+                          response = await page.goto(taiwan_search_url('Nintendo Switch'), wait_until='domcontentloaded', timeout=30000)
+                          print('Navigation HTTP:', response.status if response else None, flush=True)
+                          stage = 'controls'
+                          await page.wait_for_selector('[data-testid="item-sort-panel"]', timeout=20000)
+                          stage = 'results'
+                          await page.wait_for_function("""() => !!document.querySelector('[data-testid="search-result-items"] a[data-testid^="serp-item-tile"]') || /找不到符合|沒有找到|沒有符合|找不到商品|沒有搜尋結果|沒有搜索結果/.test(document.querySelector('main')?.innerText || '')""", timeout=20000)
+                          items = parse_taiwan_results(await page.evaluate(EXTRACT_SEARCH))
+                          print('Verified Taiwan offers:', len(items), flush=True)
+                      except Exception as error:
+                          print('Failure stage:', stage, type(error).__name__, flush=True)
+                          snapshot = await page.evaluate("""() => ({onTaiwanHost:location.host==='tw.mercari.com',readyState:document.readyState,hasSort:!!document.querySelector('[data-testid="item-sort-panel"]'),hasAvailability:!!document.querySelector('[data-testid="item-availability-filter-panel"]'),hasResults:!!document.querySelector('[data-testid="search-result-items"]'),cards:document.querySelectorAll('a[data-testid^="serp-item-tile"]').length,challenge:/captcha|verify you are human|access denied|checking your browser/i.test(document.body.innerText)})""")
+                          print(json.dumps(snapshot), flush=True)
+                          raise
+                  finally:
+                      await browser.close()
+          asyncio.run(probe())
       - name: Verify Japanese storefront access
         if: ${{ inputs.surugaya_probe }}
         shell: python
