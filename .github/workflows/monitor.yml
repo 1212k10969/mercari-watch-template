@@ -2,6 +2,11 @@ name: Mercari monitor
 on:
   workflow_dispatch:
     inputs:
+      source:
+        description: Limit a manual run to one source; private search rules stay in Secrets
+        type: choice
+        options: [all, jp, tw, yahoo_fleamarket, yahoo_auctions, surugaya]
+        default: all
       test_line:
         description: 發送一則純文字 LINE 連線測試
         type: boolean
@@ -19,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   monitor:
-    if: github.event_name == 'workflow_dispatch' || vars.MONITOR_ENABLED == 'true'
+    if: (github.event_name == 'workflow_dispatch' || vars.MONITOR_ENABLED == 'true') && (inputs.source != 'surugaya' || inputs.test_line || inputs.test_discord)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -51,7 +56,13 @@ jobs:
           WATCHLIST_JSON: ${{ secrets.WATCHLIST_JSON }}
           MONITOR_STATE_KEY: ${{ secrets.MONITOR_STATE_KEY }}
           MONITOR_STATE_PATH: .state/seen.enc
-        run: python mercari_watch.py --once --source jp --source tw --source yahoo_fleamarket --source yahoo_auctions
+          MONITOR_SOURCE: ${{ inputs.source }}
+        run: |
+          case "$MONITOR_SOURCE" in
+            ""|all) python mercari_watch.py --once --source jp --source tw --source yahoo_fleamarket --source yahoo_auctions ;;
+            jp|tw|yahoo_fleamarket|yahoo_auctions) python mercari_watch.py --once --source "$MONITOR_SOURCE" ;;
+            *) exit 1 ;;
+          esac
       - name: Test LINE
         id: test_line
         if: ${{ inputs.test_line }}
@@ -72,7 +83,7 @@ jobs:
           path: .state/seen.enc
           key: ${{ runner.os }}-mercari-private-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
   surugaya:
-    if: (github.event_name == 'workflow_dispatch' || vars.MONITOR_ENABLED == 'true') && !inputs.test_line && !inputs.test_discord
+    if: (github.event_name == 'workflow_dispatch' || vars.MONITOR_ENABLED == 'true') && !inputs.test_line && !inputs.test_discord && (!inputs.source || inputs.source == 'all' || inputs.source == 'surugaya')
     runs-on: windows-latest
     timeout-minutes: 10
     env:

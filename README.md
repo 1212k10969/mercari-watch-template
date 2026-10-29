@@ -114,7 +114,7 @@ Yahoo 新增來源同樣首次只建立基準，不重播既有商品。搜尋�
 
 1. 使用自己的 repository。公開 fork 中只保留程式與範本。
 2. 在 Settings → Secrets and variables → Actions → Secrets 設定 `WATCHLIST_JSON`、`MONITOR_STATE_KEY`，以及通知通道憑證。至少設定一種通知通道。
-3. 到 Actions → Mercari monitor → Run workflow；勾選 `test_discord` 或 `test_line` 可先測試通知。
+3. 到 Actions → Mercari monitor → Run workflow；勾選 `test_discord` 或 `test_line` 可先測試通知。`source` 預設 `all`，也可選單一來源以重查失敗來源，搜尋詞仍只從 Secrets 讀取。
 4. 在 Variables 設定 `MONITOR_ENABLED=true`，啟用每 30 分鐘檢查；設為 `false` 停止排程。GitHub 排程可能延遲。
 5. 從執行結果確認各來源的成功／失敗狀態；被拒絕、驗證頁或無法確認篩選條件，都視為搜尋失敗。
 

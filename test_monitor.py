@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import mercari_watch as app
-from market_sources import SourceUnavailable, TaiwanItem, original_item_id, parse_taiwan_results, taiwan_search_url
+from market_sources import SourceUnavailable, TaiwanItem, TaiwanSearch, original_item_id, parse_taiwan_results, taiwan_search_url
 from urllib.parse import parse_qs, urlparse
 
 
@@ -145,6 +145,23 @@ class MonitorTests(unittest.TestCase):
         self.assertIn("old", state["sample"])
         self.assertEqual(state["_baselines"], ["sample:jp", "sample:surugaya"])
         self.assertEqual(state["_health"]["sources"]["jp"]["fails"], 2)
+
+    def test_taiwan_timeouts_retry_once_and_rejections_do_not_retry(self):
+        from playwright.async_api import TimeoutError as BrowserTimeout
+        for outcomes, attempts, fails in [
+            ([BrowserTimeout("timeout"), [item()]], 2, False),
+            ([BrowserTimeout("timeout"), BrowserTimeout("timeout")], 2, True),
+            ([SourceUnavailable("rejected")], 1, True),
+        ]:
+            with self.subTest(attempts=attempts, fails=fails), patch("market_sources.asyncio.sleep", AsyncMock()):
+                source = TaiwanSearch()
+                source._search_once = AsyncMock(side_effect=outcomes)
+                if fails:
+                    with self.assertRaises(SourceUnavailable):
+                        asyncio.run(source.search("example"))
+                else:
+                    self.assertEqual(len(asyncio.run(source.search("example"))), 1)
+                self.assertEqual(source._search_once.await_count, attempts)
 
     def test_notify_failure_keeps_old_state_then_success_advances_it(self):
         self.seen_path.write_text(json.dumps({"sample": ["one"]}))

@@ -1,6 +1,7 @@
 """Read the Taiwan storefront independently, using its public search page."""
 import re
 import os
+import asyncio
 from dataclasses import dataclass
 from urllib.parse import urlencode, urlparse
 
@@ -95,6 +96,16 @@ class TaiwanSearch:
             await self.playwright.stop()
 
     async def search(self, keyword: str) -> list[TaiwanItem]:
+        from playwright.async_api import TimeoutError as BrowserTimeout
+        for attempt in range(2):
+            try:
+                return await self._search_once(keyword)
+            except BrowserTimeout as error:
+                if attempt:
+                    raise SourceUnavailable("Taiwan search timed out after one retry") from error
+                await asyncio.sleep(1)
+
+    async def _search_once(self, keyword: str) -> list[TaiwanItem]:
         if self.browser is None:
             from playwright.async_api import async_playwright
             self.playwright = await async_playwright().start()
