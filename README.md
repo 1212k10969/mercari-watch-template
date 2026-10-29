@@ -119,7 +119,7 @@ Yahoo 新增來源同樣首次只建立基準，不重播既有商品。搜尋�
 5. 看 [雲端計時紀錄](https://github.com/danny0926/mercari-watch-template/actions/workflows/monitor-clock.yml) 的等待狀態與下一輪，以及 [監聽執行紀錄](https://github.com/danny0926/mercari-watch-template/actions/workflows/market-monitor.yml)。自動監聽標題為 `Automatic monitor from clock …`，對應父計時 run。`workflow_dispatch` 可由使用者或雲端程式呼叫；事件名稱本身不能區分手動與自動，應連同父計時紀錄、觸發者及時間查看。
 6. 單次檢查或通知測試仍使用 **Mercari monitor** → Run workflow；勾選 `test_discord` 或 `test_line` 可測試通知。`source` 可限制單一來源，搜尋詞仍只從 Secrets 讀取。來源失敗會保留其紀錄，其他來源繼續處理。
 
-原生 cron 在本次實際觀察期間沒有產生 `schedule` 事件，因此正式流程已改用 GitHub environment wait timer，不將「設定了 cron」當作排程成功。等待由 GitHub 處理，無須本機保持開機，也不呼叫模型；等待期間不計入執行計費時間，見 [GitHub 官方說明](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)。計時流程只使用目前 repo 的 `GITHUB_TOKEN`，不需要額外 PAT。請先設定 environment；程式會核對等候時間，缺少或不符時停止並告警，避免連續快速啟動。
+原生 cron 在本次實際觀察期間沒有產生 `schedule` 事件，因此正式流程已改用 GitHub environment wait timer，不將「設定了 cron」當作排程成功。此方案使用公開 repo 可用的等待計時功能；等待由 GitHub 處理，無須本機保持開機，也不呼叫模型。等待期間不計入執行計費時間，見 [GitHub 官方說明](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)。計時流程只使用目前 repo 的 `GITHUB_TOKEN`，不需要額外 PAT。請先設定 environment；程式會核對等候時間，缺少或不符時停止並告警，避免連續快速啟動。
 
 停止時將 `MONITOR_ENABLED=false`；若要立即終止等待，也可取消 **Monitor clock** 正在等待的 run。已開始的來源工作可自行完成。重啟時設回 `true`，再執行一次 **Monitor clock**。工作被取消、workflow 被停用或持續 API 故障可能中斷接力；計時設定或交接失敗會向已設定的 Discord 通道發送警告，但故意取消不當作故障。來源健康警報只在程式啟動後運作，仍應核對最近的計時與監聽時間。
 

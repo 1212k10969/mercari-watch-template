@@ -110,7 +110,10 @@ jobs:
               if not webhook:
                   continue
               try:
-                  request = urllib.request.Request(webhook, data=payload, headers={'Content-Type': 'application/json'})
+                  request = urllib.request.Request(webhook, data=payload, headers={
+                      'Content-Type': 'application/json',
+                      'User-Agent': 'DiscordBot (https://github.com/danny0926/mercari-watch-template, 0.4.2)',
+                  })
                   with urllib.request.urlopen(request, timeout=15):
                       pass
               except Exception:
