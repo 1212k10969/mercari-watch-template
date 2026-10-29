@@ -35,7 +35,7 @@ from yahoo_sources import YahooSearch
 from surugaya_source import SurugayaSearch
 
 BASE = Path(__file__).parent
-VERSION = "0.4.4"
+VERSION = "0.4.5"
 WATCHLIST = BASE / "watchlist.json"
 SEEN = BASE / "seen.json"
 SEEN_KEEP = 500          # 每組條件最多記住幾個 ID
@@ -200,16 +200,26 @@ def mercari_proxy_id(x: dict) -> str | None:
     links = x.get("links") or {"item": x["url"]}
     urls = [urlparse(url) for url in links.values()]
     if re.fullmatch(r"m\d+", identity) and any(
-            url.scheme == "https" and ((url.hostname == "jp.mercari.com" and url.path == "/item/" + identity)
+            url.scheme == "https" and ((url.hostname == "jp.mercari.com" and url.path in ("/item/" + identity, "/ja/item/" + identity))
             or (url.hostname == "tw.mercari.com" and url.path.startswith("/zh-hant/items/"))) for url in urls):
         return identity
     if identity.startswith("shops:"):
         shop_id = identity[6:]
         if re.fullmatch(r"[A-Za-z0-9]{22}", shop_id) and any(
                 url.scheme == "https" and url.hostname == "jp.mercari.com"
-                and url.path == "/shops/product/" + shop_id for url in urls):
+                and url.path in ("/shops/product/" + shop_id, "/ja/shops/product/" + shop_id) for url in urls):
             return shop_id
     return None
+
+
+def mercari_japanese_url(url: str) -> str:
+    """Use the native Japanese route; unprefixed routes can honor a region cookie."""
+    parsed = urlparse(url)
+    if parsed.scheme == "https" and parsed.hostname == "jp.mercari.com" and re.fullmatch(
+            r"/(?:ja/)?(?:item/m\d+|shops/product/[A-Za-z0-9]{22})", parsed.path):
+        path = parsed.path[3:] if parsed.path.startswith("/ja/") else parsed.path
+        return parsed._replace(path="/ja" + path).geturl()
+    return url
 
 
 def notification_links(x: dict) -> dict:
@@ -220,6 +230,7 @@ def notification_links(x: dict) -> dict:
         path = "/shops/product/" if x["item_id"].startswith("shops:") else "/item/"
         links.setdefault("jp", "https://jp.mercari.com" + path + identity)
         links["buyee"] = "https://buyee.jp/mercari/item/" + identity
+        links = {source: mercari_japanese_url(url) for source, url in links.items()}
         if mercari_link_mode() == "buyee":
             links = {"buyee": links.pop("buyee"), **links}
     return links
@@ -227,7 +238,8 @@ def notification_links(x: dict) -> dict:
 
 def notification_url(x: dict) -> str:
     links = notification_links(x)
-    return links.get("buyee", x["url"]) if mercari_link_mode() == "buyee" else x["url"]
+    original = mercari_japanese_url(x["url"]) if mercari_proxy_id(x) else x["url"]
+    return links.get("buyee", original) if mercari_link_mode() == "buyee" else original
 
 
 def bubble(x: dict) -> dict:

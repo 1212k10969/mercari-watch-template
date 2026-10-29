@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.5
+
+- Use Mercari's explicit Japanese item and Shops routes in notification links to bypass the verified region-cookie redirect.
+- Preserve original listing URLs, IDs, query strings, Taiwan source links and encrypted history.
+- Cover native routes in Discord and LINE while retaining explicit opt-in proxy mode.
+- Document the reproduced HTTP 307 redirect caused by the regional preference cookie.
+
 ## 0.4.4
 
 - Distinguish Mercari listing sources from optional Buyee proxy destinations in notifications.
