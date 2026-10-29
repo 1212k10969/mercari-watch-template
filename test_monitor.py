@@ -12,12 +12,15 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import mercari_watch as app
+from market_sources import SourceUnavailable, TaiwanItem, TaiwanSearch, original_item_id, parse_taiwan_results, taiwan_search_url
+from urllib.parse import parse_qs, urlparse
 
 
 def watch(**changes):
     return {"id": "sample", "name": "測試條件", "keyword": "測試",
             "keywords": [], "price_min": None, "price_max": 1000,
             "must_match": [], "must_not_match": [], "enabled": True,
+            "include_auctions": True,
             **changes}
 
 
@@ -29,6 +32,16 @@ def item(id_="one", **changes):
 
 class MonitorTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, {
+            "LINE_CHANNEL_ACCESS_TOKEN": "not-a-real-token",
+            "LINE_USER_ID": "not-a-real-recipient",
+            "PYTHON_DOTENV_DISABLED": "1",
+        }, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+        network = patch.object(app.httpx, "post", side_effect=AssertionError("Unexpected HTTP request"))
+        network.start()
+        self.addCleanup(network.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.watch_path = Path(self.tmp.name) / "watchlist.json"
@@ -68,7 +81,13 @@ class MonitorTests(unittest.TestCase):
         bad_values = [{}, [watch(keyword="")], [watch(id="")],
                       [watch(id="_health")], [watch(), watch()],
                       [watch(price_min=1001)], [watch(must_match=["["])],
-                      [watch(keywords=[""])]]
+                      [watch(keywords=[""])], [watch(sources=[])],
+                      [watch(sources=["other"])], [watch(sources=["jp", "jp"])],
+                      [watch(source_keywords={"tw": ["example"]})],
+                      [watch(sources=["tw"], source_keywords={"tw": []})],
+                      [watch(discord_webhook_env="GITHUB_TOKEN")],
+                      [watch(discord_webhook_env="DISCORD_WEBHOOK_URL_bad")],
+                      [watch(id="_known_by_route")]]
         for values in bad_values:
             self.write_watches(values)
             with patch.object(app, "Mercapi") as client:
@@ -84,6 +103,10 @@ class MonitorTests(unittest.TestCase):
                 client, watch(keywords=["first", "second", "first"])))
         self.assertEqual([x.id_ for x in result], ["one", "two"])
         self.assertEqual(client.search.await_count, 2)
+        options = client.search.call_args.kwargs
+        self.assertEqual(options["sort_by"], app.SearchRequestData.SortBy.SORT_CREATED_TIME)
+        self.assertEqual(options["sort_order"], app.SearchRequestData.SortOrder.ORDER_DESC)
+        self.assertEqual(options["status"], [app.SearchRequestData.Status.STATUS_ON_SALE])
 
     def test_partial_keyword_failure_does_not_return_partial_result(self):
         client = Obj(search=AsyncMock(side_effect=[
@@ -98,6 +121,13 @@ class MonitorTests(unittest.TestCase):
         auction.highest_bid = 1000
         self.assertTrue(app.passes_filters(item(auction=auction), watch()))
         self.assertFalse(app.passes_filters(item(auction=auction), watch(include_auctions=False)))
+        default_watch = watch()
+        default_watch.pop("include_auctions")
+        self.assertFalse(app.passes_filters(item(auction=auction), default_watch))
+        client = Obj(search=AsyncMock())
+        with self.assertRaises(ValueError):
+            asyncio.run(app.search_new(client, watch(source="yahoo_auctions")))
+        client.search.assert_not_awaited()
         self.assertFalse(app.passes_filters(item(), watch(must_match=["other"])))
         self.assertFalse(app.passes_filters(item(), watch(must_not_match=["商品"])))
         self.assertFalse(app.is_auction(item(auction=Obj(bid_deadline=None))))
@@ -107,6 +137,39 @@ class MonitorTests(unittest.TestCase):
             self.assertEqual(self.run_check(), 0)
             send.assert_not_called()
         self.assertEqual(json.loads(self.seen_path.read_text())["sample"], ["one"])
+
+    def test_selected_source_preserves_other_source_history_and_health(self):
+        self.write_watches([watch(sources=["jp", "surugaya"])])
+        self.seen_path.write_text(json.dumps({
+            "sample": ["old"], "_baselines": ["sample:jp"],
+            "_health": {"fails": 0, "alerted": False, "sources": {"jp": {"fails": 2, "alerted": False}}},
+        }))
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item()])) as search, patch.object(app, "notify") as send:
+            self.assertEqual(self.run_check(only_sources=["surugaya"]), 0)
+            self.assertEqual(search.call_count, 1)
+            self.assertEqual(search.call_args.args[1]["source"], "surugaya")
+            send.assert_not_called()
+        state = json.loads(self.seen_path.read_text())
+        self.assertIn("old", state["sample"])
+        self.assertEqual(state["_baselines"], ["sample:jp", "sample:surugaya"])
+        self.assertEqual(state["_health"]["sources"]["jp"]["fails"], 2)
+
+    def test_taiwan_timeouts_retry_once_and_rejections_do_not_retry(self):
+        from playwright.async_api import TimeoutError as BrowserTimeout
+        for outcomes, attempts, fails in [
+            ([BrowserTimeout("timeout"), [item()]], 2, False),
+            ([BrowserTimeout("timeout"), BrowserTimeout("timeout")], 2, True),
+            ([SourceUnavailable("rejected")], 1, True),
+        ]:
+            with self.subTest(attempts=attempts, fails=fails), patch("market_sources.asyncio.sleep", AsyncMock()):
+                source = TaiwanSearch()
+                source._search_once = AsyncMock(side_effect=outcomes)
+                if fails:
+                    with self.assertRaises(SourceUnavailable):
+                        asyncio.run(source.search("example"))
+                else:
+                    self.assertEqual(len(asyncio.run(source.search("example"))), 1)
+                self.assertEqual(source._search_once.await_count, attempts)
 
     def test_notify_failure_keeps_old_state_then_success_advances_it(self):
         self.seen_path.write_text(json.dumps({"sample": ["one"]}))
@@ -158,6 +221,7 @@ class MonitorTests(unittest.TestCase):
             self.assertEqual(asyncio.run(app.test_line()), 0)
             client.assert_not_called()
             self.assertEqual(send.call_args.args[0][0]["type"], "text")
+            self.assertTrue(send.call_args.args[0][0]["text"].startswith("【測試】"))
         self.assertFalse(self.seen_path.exists())
 
     def test_line_missing_secrets_does_not_send(self):
@@ -173,6 +237,407 @@ class MonitorTests(unittest.TestCase):
             self.assertFalse(app.line_push([{"type": "text", "text": "test"}]))
         self.assertEqual(send.call_args.args[0], app.LINE_PUSH_URL)
         self.assertNotIn("sensitive-response", error.getvalue())
+
+    def test_discord_only_sends_product_and_advances_state(self):
+        self.seen_path.write_text(json.dumps({"sample": ["one"]}))
+        env = {"DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/123/not-a-real-token"}
+        with patch.dict(os.environ, env, clear=True), patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item("two", thumbnails=["https://example.com/product.jpg"])])), patch.object(app, "line_push") as line, patch.object(app.httpx, "post", return_value=httpx.Response(200)) as send:
+            self.assertEqual(self.run_check(), 0)
+        line.assert_not_called()
+        self.assertEqual(send.call_args.args[0].params["wait"], "true")
+        payload = send.call_args.kwargs["json"]
+        self.assertEqual(payload["allowed_mentions"], {"parse": []})
+        self.assertEqual(payload["embeds"][0]["title"], "測試商品")
+        self.assertEqual(payload["embeds"][0]["fields"][0]["value"], "¥500")
+        self.assertEqual(payload["embeds"][0]["image"]["url"], "https://example.com/product.jpg")
+        self.assertIn("https://jp.mercari.com/item/two", payload["embeds"][0]["description"])
+        self.assertEqual(json.loads(self.seen_path.read_text())["sample"], ["two", "one"])
+
+    def test_both_channels_attempted_and_failure_preserves_state(self):
+        env = {"LINE_CHANNEL_ACCESS_TOKEN": "fake", "LINE_USER_ID": "fake",
+               "DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/123/fake"}
+        for line_ok, discord_ok in ((False, True), (True, False), (True, True)):
+            with self.subTest(line=line_ok, discord=discord_ok):
+                self.seen_path.write_text(json.dumps({"sample": ["one"]}))
+                with patch.dict(os.environ, env, clear=True), patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item("two")])), patch.object(app, "line_push", return_value=line_ok) as line, patch.object(app, "discord_push", return_value=discord_ok) as discord:
+                    self.assertEqual(self.run_check(), 0 if line_ok and discord_ok else 1)
+                line.assert_called_once()
+                discord.assert_called_once()
+                expected = ["two", "one"] if line_ok and discord_ok else ["one"]
+                self.assertEqual(json.loads(self.seen_path.read_text())["sample"], expected)
+
+    def test_no_channels_does_not_mark_new_items_notified(self):
+        self.seen_path.write_text(json.dumps({"sample": ["one"]}))
+        with patch.dict(os.environ, {}, clear=True), patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item("two")])), patch.object(app, "line_push") as line, patch.object(app, "discord_push") as discord:
+            self.assertEqual(self.run_check(), 1)
+        line.assert_not_called()
+        discord.assert_not_called()
+        self.assertEqual(json.loads(self.seen_path.read_text())["sample"], ["one"])
+
+    def test_partial_line_config_still_attempts_discord(self):
+        env = {"LINE_CHANNEL_ACCESS_TOKEN": "fake",
+               "DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/123/fake"}
+        record = app.to_record(item(), watch())
+        with patch.dict(os.environ, env, clear=True), patch.object(app, "discord_push", return_value=True) as discord, contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(app.notify([record]))
+        discord.assert_called_once()
+
+    def test_discord_chunks_keep_items_and_respect_embed_limits(self):
+        for note in ("", "人工核對" * 2000):
+            with self.subTest(long_note=bool(note)):
+                records = [app.to_record(item(str(i), name="商品" * 150), watch(review_note=note)) for i in range(26)]
+                with patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "fake"}, clear=True), patch.object(app, "discord_push", return_value=True) as send, contextlib.redirect_stdout(io.StringIO()):
+                    self.assertTrue(app.notify(records + [records[0]]))
+                messages = [call.args[0] for call in send.call_args_list]
+                embeds = [embed for message in messages for embed in message["embeds"]]
+                self.assertEqual([embed["url"] for embed in embeds], [record["url"] for record in records])
+                for message in messages:
+                    self.assertLessEqual(len(message["embeds"]), 10)
+                    size = 0
+                    for embed in message["embeds"]:
+                        self.assertLessEqual(len(embed["title"]), 256)
+                        self.assertLessEqual(len(embed.get("description", "")), 4096)
+                        size += len(embed["title"]) + len(embed.get("description", ""))
+                        size += sum(len(field["name"]) + len(field["value"]) for field in embed["fields"])
+                    self.assertLessEqual(size, 6000)
+
+    def test_discord_auction_card_includes_current_price_and_details(self):
+        auction = Obj(bid_deadline=datetime(2026, 1, 1, 12, tzinfo=timezone.utc), highest_bid=700, total_bid=2)
+        record = app.to_record(item(auction=auction, thumbnails=["https://example.com/item.jpg"]), watch(review_note="請核對配件"))
+        embed = app.build_discord_messages([record])[0]["embeds"][0]
+        self.assertEqual(embed["image"]["url"], "https://example.com/item.jpg")
+        self.assertIn("請核對配件", embed["description"])
+        self.assertEqual([field["value"] for field in embed["fields"]], ["¥700", "01/01 20:00", "2"])
+
+    def test_discord_test_does_not_query_or_write_state(self):
+        with patch.object(app, "Mercapi") as client, patch.object(app, "discord_push", return_value=True) as send:
+            self.assertEqual(asyncio.run(app.test_discord()), 0)
+        client.assert_not_called()
+        self.assertIn("content", send.call_args.args[0])
+        self.assertTrue(send.call_args.args[0]["content"].startswith("【測試】"))
+        self.assertFalse(self.seen_path.exists())
+
+    def test_both_test_flags_skip_monitor_even_if_line_fails(self):
+        with patch.object(app.sys, "argv", ["mercari_watch.py", "--once", "--test-line", "--test-discord"]), patch.object(app, "test_line", AsyncMock(return_value=1)) as line, patch.object(app, "test_discord", AsyncMock(return_value=0)) as discord, patch.object(app, "check_once", AsyncMock()) as check:
+            with self.assertRaises(SystemExit) as result:
+                app.main()
+        self.assertEqual(result.exception.code, 1)
+        line.assert_awaited_once()
+        discord.assert_awaited_once()
+        check.assert_not_awaited()
+        self.assertFalse(self.seen_path.exists())
+
+    def test_discord_missing_url_does_not_send(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(app.httpx, "post") as send, contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(app.discord_push({"content": "test"}))
+        send.assert_not_called()
+
+    def test_discord_errors_do_not_log_url_token_or_response(self):
+        secret = "not-a-real-webhook-secret"
+        env = {"DISCORD_WEBHOOK_URL": f"https://discord.com/api/webhooks/123/{secret}"}
+        for failure in (httpx.Response(404, text="sensitive-response"), httpx.ConnectError(f"sensitive-response {secret}")):
+            with self.subTest(failure=type(failure).__name__):
+                output, error = io.StringIO(), io.StringIO()
+                options = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
+                with patch.dict(os.environ, env, clear=True), patch.object(app.httpx, "post", **options) as send, contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+                    self.assertFalse(app.discord_push({"content": "test"}))
+                self.assertEqual(send.call_count, 1)
+                for private in (secret, env["DISCORD_WEBHOOK_URL"], "sensitive-response"):
+                    self.assertNotIn(private, output.getvalue() + error.getvalue())
+
+    def test_discord_rate_limits_use_server_delay_with_bounded_retries(self):
+        env = {"DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/123/fake"}
+        cases = [
+            ([httpx.Response(429, json={"retry_after": 0.25}), httpx.Response(200)], True, [0.25]),
+            ([httpx.Response(429, headers={"Retry-After": "0.5"}), httpx.Response(204)], True, [0.5]),
+            ([httpx.Response(429, json={"retry_after": 1000})], False, []),
+            ([httpx.Response(429, json={"retry_after": "NaN"})], False, []),
+            ([httpx.Response(429, json={"retry_after": 0})] * 3, False, [0, 0]),
+        ]
+        for responses, success, delays in cases:
+            with self.subTest(success=success, delays=delays), patch.dict(os.environ, env, clear=True), patch.object(app.httpx, "post", side_effect=responses) as send, patch.object(app.time, "sleep") as sleep, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(app.discord_push({"content": "test"}), success)
+                self.assertEqual(send.call_count, len(responses))
+                self.assertEqual([call.args[0] for call in sleep.call_args_list], delays)
+
+    def test_health_alerts_go_to_both_configured_channels(self):
+        with patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "fake"}), patch.object(app, "line_push", return_value=True) as line, patch.object(app, "discord_push", return_value=True) as discord, contextlib.redirect_stdout(io.StringIO()):
+            app.alert("監控已恢復")
+        self.assertEqual(line.call_args.args[0][0]["text"], "監控已恢復")
+        self.assertEqual(discord.call_args.args[0]["content"], "監控已恢復")
+
+    def test_private_environment_rules_override_public_template(self):
+        self.write_watches([])
+        private = [watch(keyword="private-query", price_max=None, sources=["jp", "tw"], source_keywords={"tw": ["translated-query"]})]
+        with patch.dict(os.environ, {"WATCHLIST_JSON": json.dumps(private)}):
+            self.assertEqual(app.load_watchlist(), private)
+        self.assertEqual(json.loads(self.watch_path.read_text()), [])
+
+    def test_encrypted_state_roundtrip_and_wrong_key_fail_closed(self):
+        state = {"sample": ["private-product-id"], "_known": ["private-product-id"]}
+        key = app.Fernet.generate_key().decode()
+        with patch.object(app, "SEEN", self.seen_path.with_suffix(".enc")), patch.dict(os.environ, {"MONITOR_STATE_KEY": key}):
+            app.save_state(state)
+            self.assertNotIn(b"private-product-id", app.SEEN.read_bytes())
+            self.assertEqual(app.load_state(), state)
+            with patch.dict(os.environ, {"MONITOR_STATE_KEY": app.Fernet.generate_key().decode()}):
+                with self.assertRaises(ValueError):
+                    app.load_state()
+
+    def test_persistent_monitor_requires_key_before_network(self):
+        with patch.object(app, "SEEN", self.seen_path.with_suffix(".enc")), patch.object(app, "Mercapi") as client:
+            with self.assertRaises(ValueError):
+                self.run_check()
+        client.assert_not_called()
+
+    def test_taiwan_filters_and_original_identity(self):
+        query = parse_qs(urlparse(taiwan_search_url("example")).query)
+        self.assertEqual(query["status"], ["in-stock"])
+        self.assertEqual(query["availability"], ["1"])
+        self.assertEqual(query["sort"], ["1"])
+        raw = {"url": "https://tw.mercari.com/zh-hant/items/00000000-0000-0000-0000-000000000001",
+               "title": "商品A", "price": 100,
+               "image": "https://static.mercdn.net/thumb/item/webp/m123456_1.jpg?1"}
+        data = {"status": "in-stock", "sort": "新商品", "items": [raw, raw]}
+        result = parse_taiwan_results(data)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].id_, "m123456")
+        self.assertEqual(app.price_label(app.to_record(result[0], watch())), "NT$100")
+        self.assertEqual(original_item_id("https://evilmercdn.net/m123456_1.jpg", "fallback"), "tw:fallback")
+        for invalid in ({**data, "status": "all"}, {**data, "sort": "推薦排序"}, {**data, "items": []}):
+            with self.assertRaises(SourceUnavailable):
+                parse_taiwan_results(invalid)
+
+    def test_cross_source_duplicates_merge_links_and_stay_known(self):
+        self.write_watches([watch(price_max=None, sources=["jp", "tw"])])
+        self.seen_path.write_text(json.dumps({"sample": ["old"], "_known": ["old"], "_baselines": ["sample:jp", "sample:tw"]}))
+        tw_one = TaiwanItem("m123", "商品A", 100, ["https://example.com/photo.jpg"], "https://tw.mercari.com/zh-hant/items/one")
+        tw_two = TaiwanItem("m456", "商品B", 200, [], "https://tw.mercari.com/zh-hant/items/two")
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("m123")], [tw_one, tw_two]])), patch.object(app, "notify", return_value=True) as send:
+            self.assertEqual(self.run_check(), 0)
+        records = send.call_args.args[0]
+        self.assertEqual(len(records), 2)
+        self.assertEqual(set(records[0]["links"]), {"jp", "tw"})
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("m123"), item("m456")], [tw_one]])), patch.object(app, "notify") as send:
+            self.assertEqual(self.run_check(), 0)
+        send.assert_not_called()
+
+    def test_healthy_source_continues_when_other_source_fails(self):
+        self.write_watches([watch(price_max=None, sources=["jp", "tw"])])
+        self.seen_path.write_text(json.dumps({"sample": ["old"], "_known": ["old"], "_baselines": ["sample:jp", "sample:tw"]}))
+        tw = TaiwanItem("m123", "商品A", 100, [], "https://tw.mercari.com/zh-hant/items/one")
+        error = io.StringIO()
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[RuntimeError("private-query"), [tw]])), patch.object(app, "notify", return_value=True) as send, contextlib.redirect_stderr(error):
+            self.assertEqual(self.run_check(), 1)
+        send.assert_called_once()
+        self.assertNotIn("private-query", error.getvalue())
+        state = json.loads(self.seen_path.read_text())
+        self.assertIn("m123", state["_known"])
+        self.assertIn("old", state["sample"])
+
+    def test_new_source_baseline_does_not_consume_pending_notification(self):
+        self.write_watches([watch(price_max=None, sources=["jp", "tw"])])
+        self.seen_path.write_text(json.dumps({"sample": ["old"], "_known": ["old"], "_baselines": ["sample:jp"]}))
+        tw = TaiwanItem("m123", "商品A", 100, [], "https://tw.mercari.com/zh-hant/items/one")
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("m123")], [tw]])), patch.object(app, "notify", return_value=False):
+            self.assertEqual(self.run_check(), 1)
+        state = json.loads(self.seen_path.read_text())
+        self.assertNotIn("m123", state["_known"])
+        self.assertNotIn("m123", state["sample"])
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("m123")], [tw]])), patch.object(app, "notify", return_value=True) as send:
+            self.assertEqual(self.run_check(), 0)
+        self.assertEqual(len(send.call_args.args[0]), 1)
+
+    def test_custom_destination_missing_never_falls_back(self):
+        secondary = "DISCORD_WEBHOOK_URL_SECONDARY"
+        record = app.to_record(item(), watch(discord_webhook_env=secondary))
+        with patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/1/private"}), patch.object(app, "line_push") as line, patch.object(app, "discord_push") as discord, contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(app.notify([record]))
+        line.assert_not_called()
+        discord.assert_not_called()
+        self.assertEqual(record["discord_webhook_env"], secondary)
+        self.assertNotIn("/webhooks/1/private", json.dumps(record))
+
+    def test_notifications_group_same_item_by_destination(self):
+        secondary = "DISCORD_WEBHOOK_URL_SECONDARY"
+        first = app.to_record(item(), watch())
+        second = app.to_record(item(), watch(discord_webhook_env=secondary))
+        with patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "first", secondary: "second"}), patch.object(app, "line_push", return_value=True) as line, patch.object(app, "discord_push", return_value=True) as discord, contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(app.notify([first, second, first, second]))
+        self.assertEqual(discord.call_count, 2)
+        self.assertEqual({call.kwargs["webhook_env"] for call in discord.call_args_list}, {app.DEFAULT_WEBHOOK_ENV, secondary})
+        line.assert_called_once()
+
+    def test_legacy_history_migrates_and_destinations_remain_independent(self):
+        primary, secondary = app.DEFAULT_WEBHOOK_ENV, "DISCORD_WEBHOOK_URL_SECONDARY"
+        self.write_watches([watch(id="first"), watch(id="second", discord_webhook_env=secondary)])
+        self.seen_path.write_text(json.dumps({"first": ["one"], "_known": ["one"], "_baselines": ["first:jp"]}))
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item()])), patch.object(app, "notify") as send:
+            self.assertEqual(self.run_check(), 0)
+        send.assert_not_called()
+        state = json.loads(self.seen_path.read_text())
+        self.assertEqual(state["_known_by_route"][primary], ["one"])
+        self.assertEqual(state["_known_by_route"][secondary], ["one"])
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item("two")])), patch.object(app, "notify", return_value=True) as send:
+            self.assertEqual(self.run_check(), 0)
+        self.assertEqual(send.call_count, 2)
+        self.assertEqual({call.args[0][0]["discord_webhook_env"] for call in send.call_args_list}, {primary, secondary})
+
+    def test_destination_failure_does_not_replay_successful_destination(self):
+        primary, secondary = app.DEFAULT_WEBHOOK_ENV, "DISCORD_WEBHOOK_URL_SECONDARY"
+        self.write_watches([watch(id="first"), watch(id="second", discord_webhook_env=secondary)])
+        for outcomes in ((False, True), (True, False)):
+            with self.subTest(outcomes=outcomes):
+                self.seen_path.write_text(json.dumps({"first": [], "second": [], "_known": [],
+                    "_known_by_route": {primary: [], secondary: []},
+                    "_baselines": ["first:jp", secondary + ":second:jp"]}))
+                with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item()])), patch.object(app, "notify", side_effect=outcomes):
+                    self.assertEqual(self.run_check(), 1)
+                state = json.loads(self.seen_path.read_text())
+                for route, success in zip((primary, secondary), outcomes):
+                    self.assertEqual(state["_known_by_route"][route], ["one"] if success else [])
+                with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item()])), patch.object(app, "notify", return_value=True) as send:
+                    self.assertEqual(self.run_check(), 0)
+                send.assert_called_once()
+                failed_route = primary if not outcomes[0] else secondary
+                self.assertEqual(send.call_args.args[0][0]["discord_webhook_env"], failed_route)
+
+    def test_provider_health_alert_uses_affected_destination(self):
+        secondary = "DISCORD_WEBHOOK_URL_SECONDARY"
+        self.write_watches([watch(id="first"), watch(id="second", discord_webhook_env=secondary)])
+        self.seen_path.write_text(json.dumps({"_health": {"fails": 0, "alerted": False,
+            "sources": {secondary + ":jp": {"fails": 2, "alerted": False}}}}))
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[], RuntimeError("private")])), patch.object(app, "alert") as send, contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.run_check(), 1)
+        send.assert_called_once()
+        self.assertEqual(send.call_args.kwargs["webhook_env"], secondary)
+
+    def test_discord_test_covers_each_configured_destination(self):
+        secondary = "DISCORD_WEBHOOK_URL_SECONDARY"
+        with patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "first", secondary: "second"}), patch.object(app, "discord_push", return_value=True) as send:
+            self.assertEqual(asyncio.run(app.test_discord()), 0)
+        self.assertEqual(send.call_count, 2)
+        self.assertEqual({call.kwargs["webhook_env"] for call in send.call_args_list}, {app.DEFAULT_WEBHOOK_ENV, secondary})
+        self.assertTrue(all(call.args[0]["content"].startswith("【測試】") for call in send.call_args_list))
+
+    def test_fleamarket_preserves_retired_source_history_without_searching_it(self):
+        self.write_watches([watch(price_max=None, sources=["jp", "tw", "yahoo_fleamarket"])])
+        self.seen_path.write_text(json.dumps({"sample": ["old"], "_known": ["old", "yahoo_auctions:a100"],
+                                             "_baselines": ["sample:jp", "sample:tw", "sample:yahoo_auctions"]}))
+        first = item("yahoo_fleamarket:z100", source="yahoo_fleamarket", url="https://paypayfleamarket.yahoo.co.jp/item/z100")
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("old")], [item("old")], [first]])) as search, patch.object(app, "notify") as send:
+            self.assertEqual(self.run_check(), 0)
+            send.assert_not_called()
+            self.assertEqual([call.args[1]["source"] for call in search.call_args_list], ["jp", "tw", "yahoo_fleamarket"])
+        state = json.loads(self.seen_path.read_text())
+        self.assertEqual(set(state["_known"]), {"old", "yahoo_auctions:a100", first.id_})
+        self.assertEqual(len(state["_baselines"]), 4)
+        new = item("yahoo_fleamarket:z200", source="yahoo_fleamarket", url="https://paypayfleamarket.yahoo.co.jp/item/z200")
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("old")], [item("old")], [first, new]])), patch.object(app, "notify", return_value=True) as send:
+            self.assertEqual(self.run_check(), 0)
+        send.assert_called_once()
+        self.assertEqual([record["item_id"] for record in send.call_args.args[0]], [new.id_])
+
+    def test_buyee_mode_changes_display_links_and_preserves_original_identity(self):
+        original = "https://jp.mercari.com/item/m100"
+        rec = app.to_record(item("m100", url=original, thumbnails=["https://example.org/photo.jpg"]), watch())
+        with patch.dict(os.environ, {"MERCARI_LINK_MODE": "buyee"}):
+            expected = "https://buyee.jp/mercari/item/m100"
+            embed = app.build_discord_messages([rec])[0]["embeds"][0]
+            self.assertEqual(embed["url"], expected)
+            self.assertIn("[Buyee 代購入口（非原站）]", embed["description"])
+            self.assertNotIn(original, embed["description"])
+            self.assertIn({"name": "原站網址（僅供複製，可能轉區）", "value": "`https://jp.mercari.com/ja/item/m100`", "inline": False}, embed["fields"])
+            self.assertIn({"name": "日本商品編號", "value": "m100", "inline": True}, embed["fields"])
+            card = app.bubble(rec)
+            self.assertEqual(card["footer"]["contents"][0]["action"]["uri"], expected)
+            self.assertEqual(card["hero"]["action"]["uri"], expected)
+        self.assertEqual(rec["item_id"], "m100")
+        self.assertEqual(rec["url"], original)
+        self.assertEqual(rec["links"], {"jp": original})
+        self.assertEqual(app.notification_url(rec), "https://jp.mercari.com/ja/item/m100")
+
+    def test_original_mode_keeps_mercari_primary_and_labels_proxy_separately(self):
+        identity = "AbCdEfGh1234567890JKLM"
+        for listing, source_label in (
+                (item("m100", url="https://jp.mercari.com/item/m100"), "Mercari 日本站"),
+                (item(identity, item_type="ITEM_TYPE_BEYOND"), "Mercari Shops 日本站")):
+            with self.subTest(source_label=source_label), patch.dict(os.environ, {"MERCARI_LINK_MODE": "original"}):
+                rec = app.to_record(listing, watch())
+                original = rec["url"]
+                embed = app.build_discord_messages([rec])[0]["embeds"][0]
+                expected = "https://jp.mercari.com/ja" + rec["url"].removeprefix("https://jp.mercari.com")
+                self.assertEqual(embed["url"], expected)
+                self.assertIn("來源：" + source_label, embed["description"])
+                self.assertIn("[" + source_label + "](" + expected + ")", embed["description"])
+                self.assertIn("[Buyee 代購入口（非原站）]", embed["description"])
+                self.assertFalse(any(field["name"].startswith("原站網址") for field in embed["fields"]))
+                self.assertEqual(app.bubble(rec)["footer"]["contents"][0]["action"]["uri"], expected)
+                self.assertEqual(rec["url"], original)
+
+    def test_japanese_route_preserves_merged_taiwan_links_and_url_parameters(self):
+        original = "https://jp.mercari.com/item/m100?ref=sample#photos"
+        taiwan = "https://tw.mercari.com/zh-hant/items/sample"
+        rec = app.to_record(item("m100", url=original), watch())
+        rec["links"]["tw"] = taiwan
+        expected = "https://jp.mercari.com/ja/item/m100?ref=sample#photos"
+        with patch.dict(os.environ, {"MERCARI_LINK_MODE": "original"}):
+            self.assertEqual(app.notification_url(rec), expected)
+            self.assertEqual(app.notification_links(rec)["jp"], expected)
+            self.assertEqual(app.notification_links(rec)["tw"], taiwan)
+            self.assertEqual(app.mercari_japanese_url(expected), expected)
+            localized = {**rec, "url": expected, "links": {"jp": expected, "tw": taiwan}}
+            self.assertEqual(app.notification_url(localized), expected)
+            tw_primary = {**rec, "url": taiwan}
+            self.assertEqual(app.notification_url(tw_primary), taiwan)
+        self.assertEqual(rec["url"], original)
+        self.assertEqual(rec["links"], {"jp": original, "tw": taiwan})
+
+    def test_shops_links_use_verified_buyee_route_and_copyable_original(self):
+        identity = "AbCdEfGh1234567890JKLM"
+        original = "https://jp.mercari.com/shops/product/" + identity
+        rec = app.to_record(item(identity, item_type="ITEM_TYPE_BEYOND", thumbnails=["https://example.org/photo.jpg"]), watch())
+        with patch.dict(os.environ, {"MERCARI_LINK_MODE": "buyee"}):
+            expected = "https://buyee.jp/mercari/item/" + identity
+            embed = app.build_discord_messages([rec])[0]["embeds"][0]
+            self.assertEqual(embed["url"], expected)
+            self.assertIn("Mercari Shops 日本站", embed["description"])
+            self.assertNotIn(original, embed["description"])
+            self.assertIn({"name": "Shops 商品編號", "value": identity, "inline": True}, embed["fields"])
+            self.assertIn({"name": "原站網址（僅供複製，可能轉區）", "value": "`https://jp.mercari.com/ja/shops/product/" + identity + "`", "inline": False}, embed["fields"])
+            self.assertEqual(app.bubble(rec)["footer"]["contents"][0]["action"]["uri"], expected)
+            self.assertEqual(app.bubble(rec)["hero"]["action"]["uri"], expected)
+        self.assertEqual(rec["item_id"], "shops:" + identity)
+        self.assertEqual(rec["url"], original)
+        self.assertEqual(rec["links"], {"jp": original})
+        self.assertEqual(app.notification_url(rec), "https://jp.mercari.com/ja/shops/product/" + identity)
+
+    def test_shops_mapping_rejects_mismatched_or_external_source_urls(self):
+        identity = "AbCdEfGh1234567890JKLM"
+        for url in ("https://example.org/shops/product/" + identity,
+                    "https://jp.mercari.com/shops/product/XbCdEfGh1234567890JKLM",
+                    "http://jp.mercari.com/shops/product/" + identity):
+            with self.subTest(url=url), patch.dict(os.environ, {"MERCARI_LINK_MODE": "buyee"}):
+                rec = app.to_record(item(identity, item_type="ITEM_TYPE_BEYOND", url=url), watch())
+                self.assertEqual(app.notification_url(rec), url)
+                self.assertNotIn("buyee", app.notification_links(rec))
+
+    def test_buyee_mode_requires_verified_mercari_identity(self):
+        with patch.dict(os.environ, {"MERCARI_LINK_MODE": "buyee"}):
+            for it in (item("yahoo_auctions:a100", source="yahoo_auctions", url="https://auctions.yahoo.co.jp/jp/auction/a100"),
+                       item("abc123", item_type="ITEM_TYPE_BEYOND"),
+                       item("tw:abc123", currency="TWD", url="https://tw.mercari.com/zh-hant/items/abc123")):
+                rec = app.to_record(it, watch())
+                self.assertEqual(app.notification_url(rec), rec["url"])
+                self.assertNotIn("buyee", app.notification_links(rec))
+            tw = app.to_record(item("m100", currency="TWD", url="https://tw.mercari.com/zh-hant/items/example"), watch())
+            self.assertEqual(app.notification_url(tw), "https://buyee.jp/mercari/item/m100")
+
+    def test_invalid_link_mode_fails_before_search(self):
+        with patch.dict(os.environ, {"MERCARI_LINK_MODE": "unsupported"}), patch.object(app, "Mercapi") as client:
+            with self.assertRaises(ValueError):
+                self.run_check()
+            client.assert_not_called()
 
 
 if __name__ == "__main__":

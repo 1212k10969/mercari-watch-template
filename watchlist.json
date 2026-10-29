@@ -8,7 +8,7 @@
     "price_max": null,
     "must_match": [],
     "must_not_match": [],
-    "include_auctions": true,
+    "include_auctions": false,
     "review_note": "",
     "enabled": false
   }

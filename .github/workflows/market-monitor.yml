@@ -1,0 +1,128 @@
+name: Mercari monitor
+run-name: ${{ inputs.clock_run_id && format('Automatic monitor from clock {0}', inputs.clock_run_id) || 'Market monitor' }}
+on:
+  workflow_dispatch:
+    inputs:
+      clock_run_id:
+        description: Parent cloud clock run; leave empty for manual runs
+        type: string
+        default: ''
+      source:
+        description: Limit a manual run to one source; private search rules stay in Secrets
+        type: choice
+        options: [all, jp, tw, yahoo_fleamarket, surugaya]
+        default: all
+      test_line:
+        description: 發送一則純文字 LINE 連線測試
+        type: boolean
+        default: false
+      test_discord:
+        description: 發送一則純文字 Discord 連線測試
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: mercari-monitor
+  cancel-in-progress: false
+jobs:
+  monitor:
+    if: (github.event_name == 'workflow_dispatch' || vars.MONITOR_ENABLED == 'true') && (!inputs.clock_run_id || vars.MONITOR_ENABLED == 'true') && (inputs.source != 'surugaya' || inputs.test_line || inputs.test_discord)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Install search browser
+        if: ${{ !inputs.test_line && !inputs.test_discord }}
+        run: python -m playwright install --with-deps chromium
+      - name: Restore encrypted monitor state
+        if: ${{ !inputs.test_line && !inputs.test_discord }}
+        uses: actions/cache/restore@v4
+        with:
+          path: .state/seen.enc
+          key: ${{ runner.os }}-mercari-private-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ runner.os }}-mercari-private-state-v1-
+      - name: Check once
+        id: monitor
+        if: ${{ !inputs.test_line && !inputs.test_discord }}
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
+          DISCORD_WEBHOOK_URL_TERTIARY: ${{ secrets.DISCORD_WEBHOOK_URL_TERTIARY }}
+          MERCARI_LINK_MODE: ${{ secrets.MERCARI_LINK_MODE }}
+          WATCHLIST_JSON: ${{ secrets.WATCHLIST_JSON }}
+          MONITOR_STATE_KEY: ${{ secrets.MONITOR_STATE_KEY }}
+          MONITOR_STATE_PATH: .state/seen.enc
+          MONITOR_SOURCE: ${{ inputs.source }}
+        run: |
+          case "$MONITOR_SOURCE" in
+            ""|all) python mercari_watch.py --once --source jp --source tw --source yahoo_fleamarket ;;
+            jp|tw|yahoo_fleamarket) python mercari_watch.py --once --source "$MONITOR_SOURCE" ;;
+            *) exit 1 ;;
+          esac
+      - name: Test LINE
+        id: test_line
+        if: ${{ inputs.test_line }}
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: python mercari_watch.py --test-line
+      - name: Test Discord
+        if: ${{ !cancelled() && inputs.test_discord && (success() || steps.test_line.outcome == 'failure') }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
+          DISCORD_WEBHOOK_URL_TERTIARY: ${{ secrets.DISCORD_WEBHOOK_URL_TERTIARY }}
+        run: python mercari_watch.py --test-discord
+      - name: Save encrypted monitor state
+        if: ${{ always() && (steps.monitor.outcome == 'success' || steps.monitor.outcome == 'failure') && hashFiles('.state/seen.enc') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .state/seen.enc
+          key: ${{ runner.os }}-mercari-private-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+  surugaya:
+    if: (github.event_name == 'workflow_dispatch' || vars.MONITOR_ENABLED == 'true') && (!inputs.clock_run_id || vars.MONITOR_ENABLED == 'true') && !inputs.test_line && !inputs.test_discord && (!inputs.source || inputs.source == 'all' || inputs.source == 'surugaya')
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore encrypted Japanese storefront state
+        uses: actions/cache/restore@v4
+        with:
+          path: .state/surugaya-seen.enc
+          key: ${{ runner.os }}-surugaya-private-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ runner.os }}-surugaya-private-state-v1-
+      - name: Check Japanese storefront
+        id: surugaya_monitor
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
+          DISCORD_WEBHOOK_URL_TERTIARY: ${{ secrets.DISCORD_WEBHOOK_URL_TERTIARY }}
+          MERCARI_LINK_MODE: ${{ secrets.MERCARI_LINK_MODE }}
+          WATCHLIST_JSON: ${{ secrets.WATCHLIST_JSON }}
+          MONITOR_STATE_KEY: ${{ secrets.MONITOR_STATE_KEY }}
+          MONITOR_STATE_PATH: .state/surugaya-seen.enc
+        run: python mercari_watch.py --once --source surugaya
+      - name: Save encrypted Japanese storefront state
+        if: ${{ always() && (steps.surugaya_monitor.outcome == 'success' || steps.surugaya_monitor.outcome == 'failure') && hashFiles('.state/surugaya-seen.enc') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .state/surugaya-seen.enc
+          key: ${{ runner.os }}-surugaya-private-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+

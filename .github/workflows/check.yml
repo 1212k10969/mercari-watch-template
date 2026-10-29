@@ -5,12 +5,27 @@ on:
     paths-ignore: [seen.json]
   pull_request:
   workflow_dispatch:
+    inputs:
+      surugaya_probe:
+        description: Verify the Japanese storefront from the runner, without private rules or notifications
+        type: boolean
+        default: false
+      taiwan_probe:
+        description: Diagnose populated and empty Taiwan searches without notifications
+        type: boolean
+        default: false
+      taiwan_probe_private:
+        description: Diagnose Taiwan searches using Secrets; log only counts and loading stages
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.surugaya_probe && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: 5
+    env:
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,4 +34,87 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python -m unittest -q
+        if: ${{ !inputs.surugaya_probe && !inputs.taiwan_probe && !inputs.taiwan_probe_private }}
+      - name: Install Taiwan probe browser
+        if: ${{ inputs.taiwan_probe || inputs.taiwan_probe_private }}
+        run: python -m playwright install --with-deps chromium
+      - name: Diagnose Taiwan storefront access
+        if: ${{ inputs.taiwan_probe || inputs.taiwan_probe_private }}
+        env:
+          WATCHLIST_JSON: ${{ inputs.taiwan_probe_private && secrets.WATCHLIST_JSON || '' }}
+          PRIVATE_PROBE: ${{ inputs.taiwan_probe_private }}
+        shell: python
+        run: |
+          import asyncio
+          import json
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path.cwd()))
+          from playwright.async_api import async_playwright
+          from market_sources import EXTRACT_SEARCH, parse_taiwan_results, taiwan_search_url
+          from mercari_watch import load_watchlist
+          async def probe():
+              keywords = ['Nintendo Switch', 'zzzz-no-such-native-offer-927419']
+              if os.environ['PRIVATE_PROBE'] == 'true':
+                  keywords = list(dict.fromkeys(keyword for rule in load_watchlist() if 'tw' in rule.get('sources', ['jp']) for keyword in (rule.get('source_keywords', {}).get('tw', rule.get('keywords', [])) or [rule['keyword']])))
+              if not keywords:
+                  raise SystemExit('No Taiwan queries configured')
+              async with async_playwright() as engine:
+                  browser = await engine.chromium.launch(headless=True, channel='chromium')
+                  try:
+                      agent = f'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{browser.version} Safari/537.36'
+                      for index, keyword in enumerate(keywords):
+                          page = await browser.new_page(locale='zh-TW', user_agent=agent)
+                          stage = 'navigation'
+                          try:
+                              response = await page.goto(taiwan_search_url(keyword), wait_until='domcontentloaded', timeout=30000)
+                              print('Query:', index + 1, 'Navigation HTTP:', response.status if response else None, flush=True)
+                              stage = 'controls'
+                              await page.wait_for_selector('[data-testid="item-sort-panel"]', timeout=20000)
+                              stage = 'results'
+                              await page.wait_for_function("""() => !!document.querySelector('[data-testid="search-result-items"] a[data-testid^="serp-item-tile"]') || /找不到符合|沒有找到|沒有符合|找不到商品|沒有搜尋結果|沒有搜索結果/.test(document.querySelector('main')?.innerText || '')""", timeout=20000)
+                              items = parse_taiwan_results(await page.evaluate(EXTRACT_SEARCH))
+                              print('Verified Taiwan offers:', len(items), flush=True)
+                          except Exception as error:
+                              print('Failure stage:', stage, type(error).__name__, flush=True)
+                              snapshot = await page.evaluate("""() => ({onTaiwanHost:location.host==='tw.mercari.com',readyState:document.readyState,hasSort:!!document.querySelector('[data-testid="item-sort-panel"]'),hasAvailability:!!document.querySelector('[data-testid="item-availability-filter-panel"]'),hasResults:!!document.querySelector('[data-testid="search-result-items"]'),cards:document.querySelectorAll('a[data-testid^="serp-item-tile"]').length,empty:/找不到符合|沒有找到|沒有符合|找不到商品|沒有搜尋結果|沒有搜索結果/.test(document.querySelector('main')?.innerText||''),challenge:/captcha|verify you are human|access denied|checking your browser/i.test(document.body.innerText)})""")
+                              print(json.dumps(snapshot), flush=True)
+                              raise SystemExit('Taiwan diagnostic failed; private query omitted') from None
+                          finally:
+                              await page.close()
+                  finally:
+                      await browser.close()
+          asyncio.run(probe())
+      - name: Verify Japanese storefront access
+        if: ${{ inputs.surugaya_probe }}
+        shell: python
+        run: |
+          import asyncio
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path.cwd()))
+          from surugaya_source import SurugayaSearch
+          from market_sources import SourceUnavailable
+          async def probe():
+              async with SurugayaSearch() as source:
+                  try:
+                      items = await source.search('Nintendo Switch')
+                  except SourceUnavailable:
+                      if source.page:
+                          print('Browser page title:', (await source.page.title())[:100])
+                          print('Verification checkbox clicked:', source.challenge_clicked)
+                      raise
+                  if not items:
+                      raise RuntimeError('Expected public search results')
+                  await source.prepare_item(items[0])
+                  if not items[0].thumbnails:
+                      raise RuntimeError('Public product image was not confirmed')
+                  import httpx
+                  async with httpx.AsyncClient() as client:
+                      response = await client.get(items[0].thumbnails[0])
+                      if response.status_code != 200 or not response.headers.get('content-type', '').startswith('image/'):
+                          raise RuntimeError('Public product image was not accessible')
+                  print(f'Japanese storefront verified: {len(items)} direct offers')
+          asyncio.run(probe())
 
