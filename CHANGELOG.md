@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- Add public Yahoo! Fleamarket and Yahoo! Auctions searches with verified newest and active filters.
+- Canonicalize mirrored Yahoo listings to one identity across sources and notification rounds.
+- Preserve auction current prices, deadlines and bid counts; keep fixed-price listings distinct.
+- Reuse existing encrypted history and quietly baseline newly enabled sources.
+- Document local-stock comparison, landed-cost estimates and a rules-first design without runtime AI calls.
+- Record Suruga-ya access restrictions; keep unverifiable sources outside production monitoring.
+
 ## 0.2.0
 
 - Route private watch rules to independently configured Discord webhooks.

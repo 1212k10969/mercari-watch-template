@@ -30,9 +30,10 @@ from dotenv import load_dotenv
 from mercapi import Mercapi
 from mercapi.requests.search import SearchRequestData
 from market_sources import TaiwanSearch
+from yahoo_sources import YahooSearch
 
 BASE = Path(__file__).parent
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 WATCHLIST = BASE / "watchlist.json"
 SEEN = BASE / "seen.json"
 SEEN_KEEP = 500          # 每組條件最多記住幾個 ID
@@ -48,6 +49,8 @@ ACCENT = "#E5004F"
 AUCTION_COLOR = "#B45309"
 DEFAULT_WEBHOOK_ENV = "DISCORD_WEBHOOK_URL"
 WEBHOOK_ENV_PATTERN = r"DISCORD_WEBHOOK_URL(?:_[A-Z0-9_]+)?"
+SOURCE_LABELS = {"jp": "Mercari 日本站", "tw": "Mercari 台灣入口",
+                 "yahoo_fleamarket": "Yahoo!フリマ", "yahoo_auctions": "Yahoo!オークション"}
 
 
 # ---------- 搜尋 ----------
@@ -99,14 +102,21 @@ def passes_filters(it, w: dict) -> bool:
     return True
 
 
-async def search_new(m: Mercapi, w: dict, taiwan=None):
+async def search_new(m: Mercapi, w: dict, taiwan=None, external=None):
     # 同一商品的不同叫法分開搜尋；全部成功才保存這組的已看紀錄。
     keywords = list(dict.fromkeys(w.get("keywords") or [w["keyword"]]))
     found = {}
     for index, keyword in enumerate(keywords):
         if index:
             await asyncio.sleep(DELAY_BETWEEN)
-        if w.get("source", "jp") == "tw":
+        source = w.get("source", "jp")
+        if source in ("yahoo_fleamarket", "yahoo_auctions"):
+            if external is None:
+                async with YahooSearch(source) as client:
+                    items = await client.search(keyword)
+            else:
+                items = await external[source].search(keyword)
+        elif source == "tw":
             if taiwan is None:
                 async with TaiwanSearch() as client:
                     items = await client.search(keyword)
@@ -142,7 +152,7 @@ def to_record(it, w: dict) -> dict:
         "price": it.real_price or 0,
         "currency": getattr(it, "currency", "JPY"),
         "url": item_url(it),
-        "links": {"tw" if getattr(it, "currency", "JPY") == "TWD" else "jp": item_url(it)},
+        "links": {getattr(it, "source", None) or ("tw" if getattr(it, "currency", "JPY") == "TWD" else "jp"): item_url(it)},
         "thumbnail": (it.thumbnails or [None])[0],
         "is_auction": is_auction(it),
         "review_note": w.get("review_note", ""),
@@ -288,7 +298,7 @@ def build_discord_messages(items: list[dict]) -> list[dict]:
     messages, embeds, characters = [], [], 0
     for x in items:
         links = x.get("links") or {"item": x["url"]}
-        labels = {"jp": "日本站", "tw": "台灣站", "item": "查看商品"}
+        labels = {**SOURCE_LABELS, "item": "查看商品"}
         link_text = " · ".join(f"[{labels.get(source, '查看商品')}]({url})" for source, url in links.items())
         description = "\n".join(filter(None, [str(x["watch"]), str(x.get("review_note") or "")]))
         description = description[:max(0, 4096 - len(link_text) - 2)] + "\n\n" + link_text
@@ -448,8 +458,8 @@ def load_watchlist() -> list[dict]:
         if low is not None and high is not None and low > high:
             raise ValueError("價格下限不可大於上限")
         sources = w.get("sources", ["jp"])
-        if not isinstance(sources, list) or not sources or any(source not in ("jp", "tw") for source in sources):
-            raise ValueError("sources 必須包含 jp 或 tw")
+        if not isinstance(sources, list) or not sources or any(source not in SOURCE_LABELS for source in sources):
+            raise ValueError("sources 包含不支援的來源")
         if len(sources) != len(set(sources)):
             raise ValueError("sources 不可重複")
         source_keywords = w.get("source_keywords", {})
@@ -495,7 +505,8 @@ async def check_once(dry_run: bool = False) -> int:
     baseline_records = {}
     source_outcomes = {}
 
-    async with TaiwanSearch() as taiwan:
+    async with TaiwanSearch() as taiwan, YahooSearch("yahoo_fleamarket") as fleamarket, YahooSearch("yahoo_auctions") as auctions:
+        external = {"yahoo_fleamarket": fleamarket, "yahoo_auctions": auctions}
         for w in active:
             wid = w["id"]
             route = webhook_env_for(w)
@@ -511,7 +522,7 @@ async def check_once(dry_run: bool = False) -> int:
                     print("tw 搜尋失敗：台灣來源請使用不限價條件", file=sys.stderr)
                     continue
                 try:
-                    items = await search_new(m, source_watch, taiwan)
+                    items = await search_new(m, source_watch, taiwan, external)
                     searched += 1
                     source_outcomes.setdefault((route, source), []).append(True)
                 except Exception as e:
@@ -580,12 +591,12 @@ async def check_once(dry_run: bool = False) -> int:
         previous = providers.get(key, {"fails": 0, "alerted": False})
         if all(outcomes):
             if previous.get("alerted"):
-                alert(f"✅ Mercari {source} 來源已恢復正常。", webhook_env=route)
+                alert(f"✅ {SOURCE_LABELS[source]} 來源已恢復正常。", webhook_env=route)
             health["sources"][key] = {"fails": 0, "alerted": False}
         else:
             current = {"fails": previous.get("fails", 0) + 1, "alerted": previous.get("alerted", False)}
             if current["fails"] >= ALERT_AFTER and not current["alerted"]:
-                alert(f"⚠️ Mercari {source} 來源已連續 {current['fails']} 次搜尋失敗，請查看執行紀錄。", webhook_env=route)
+                alert(f"⚠️ {SOURCE_LABELS[source]} 來源已連續 {current['fails']} 次搜尋失敗，請查看執行紀錄。", webhook_env=route)
                 current["alerted"] = True
             health["sources"][key] = current
     new_seen[HEALTH_KEY] = health

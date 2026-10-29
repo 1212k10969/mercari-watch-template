@@ -479,6 +479,23 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual({call.kwargs["webhook_env"] for call in send.call_args_list}, {app.DEFAULT_WEBHOOK_ENV, secondary})
         self.assertTrue(all(call.args[0]["content"].startswith("【測試】") for call in send.call_args_list))
 
+    def test_new_yahoo_sources_preserve_history_and_deduplicate_mirrors(self):
+        self.write_watches([watch(price_max=None, sources=["jp", "tw", "yahoo_fleamarket", "yahoo_auctions"])])
+        self.seen_path.write_text(json.dumps({"sample": ["old"], "_known": ["old"],
+                                             "_baselines": ["sample:jp", "sample:tw"]}))
+        first = item("yahoo_fleamarket:z100", source="yahoo_fleamarket", url="https://paypayfleamarket.yahoo.co.jp/item/z100")
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("old")], [item("old")], [first], [first]])), patch.object(app, "notify") as send:
+            self.assertEqual(self.run_check(), 0)
+            send.assert_not_called()
+        state = json.loads(self.seen_path.read_text())
+        self.assertEqual(set(state["_known"]), {"old", first.id_})
+        self.assertEqual(len(state["_baselines"]), 4)
+        new = item("yahoo_fleamarket:z200", source="yahoo_fleamarket", url="https://paypayfleamarket.yahoo.co.jp/item/z200")
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("old")], [item("old")], [first, new], [first, new]])), patch.object(app, "notify", return_value=True) as send:
+            self.assertEqual(self.run_check(), 0)
+        send.assert_called_once()
+        self.assertEqual([record["item_id"] for record in send.call_args.args[0]], [new.id_])
+
 
 if __name__ == "__main__":
     unittest.main()
