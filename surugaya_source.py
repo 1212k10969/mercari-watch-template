@@ -144,6 +144,7 @@ class SurugayaSearch:
         self.cache = {}
         self.image_cache = {}
         self.unavailable = False
+        self.challenge_clicked = False
 
     async def __aenter__(self):
         return self
@@ -199,7 +200,26 @@ class SurugayaSearch:
                 )
                 self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
             await self.page.goto(surugaya_search_url(keyword), wait_until="domcontentloaded", timeout=30000)
-            await self.page.locator('#search_header .hit').wait_for(timeout=25000)
+            from patchright.async_api import TimeoutError as BrowserTimeout
+            try:
+                await self.page.locator('#search_header .hit').wait_for(timeout=10000)
+            except BrowserTimeout:
+                # Try the actual visible verification control once, unattended.
+                # Clicking it does not imply that the site has accepted the browser.
+                for frame in self.page.frames:
+                    if urlparse(frame.url).hostname != "challenges.cloudflare.com":
+                        continue
+                    try:
+                        checkbox = frame.get_by_role("checkbox")
+                        if not await checkbox.count():
+                            checkbox = frame.locator('input[type="checkbox"]')
+                        if await checkbox.count() and await checkbox.first.is_visible():
+                            await checkbox.first.click(timeout=3000)
+                            self.challenge_clicked = True
+                            break
+                    except Exception:
+                        continue
+                await self.page.locator('#search_header .hit').wait_for(timeout=15000)
             results = parse_surugaya_results(await self.page.evaluate(EXTRACT_SEARCH), keyword)
             self.cache[keyword] = results
             return list(results)

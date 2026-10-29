@@ -26,15 +26,26 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python -m unittest -q
+        if: ${{ !inputs.surugaya_probe }}
       - name: Verify Japanese storefront access
         if: ${{ inputs.surugaya_probe }}
         shell: python
         run: |
           import asyncio
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path.cwd()))
           from surugaya_source import SurugayaSearch
+          from market_sources import SourceUnavailable
           async def probe():
               async with SurugayaSearch() as source:
-                  items = await source.search('Nintendo Switch')
+                  try:
+                      items = await source.search('Nintendo Switch')
+                  except SourceUnavailable:
+                      if source.page:
+                          print('Browser page title:', (await source.page.title())[:100])
+                          print('Verification checkbox clicked:', source.challenge_clicked)
+                      raise
                   if not items:
                       raise RuntimeError('Expected public search results')
                   await source.prepare_item(items[0])
