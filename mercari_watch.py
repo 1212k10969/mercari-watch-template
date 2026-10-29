@@ -35,7 +35,7 @@ from yahoo_sources import YahooSearch
 from surugaya_source import SurugayaSearch
 
 BASE = Path(__file__).parent
-VERSION = "0.4.3"
+VERSION = "0.4.4"
 WATCHLIST = BASE / "watchlist.json"
 SEEN = BASE / "seen.json"
 SEEN_KEEP = 500          # 每組條件最多記住幾個 ID
@@ -352,17 +352,19 @@ def build_discord_messages(items: list[dict]) -> list[dict]:
     messages, embeds, characters = [], [], 0
     for x in items:
         links = notification_links(x)
-        labels = {**SOURCE_LABELS, "item": "查看商品", "buyee": "Buyee 商品頁"}
+        labels = {**SOURCE_LABELS, "item": "查看商品", "buyee": "Buyee 代購入口（非原站）"}
+        if str(x["item_id"]).startswith("shops:"):
+            labels["jp"] = "Mercari Shops 日本站"
         proxy_mode = mercari_link_mode() == "buyee" and "buyee" in links
         originals = {source: url for source, url in links.items()
                      if urlparse(url).hostname in ("jp.mercari.com", "tw.mercari.com")}
         displayed = {source: url for source, url in links.items() if not proxy_mode or source not in originals}
         link_text = " · ".join(f"[{labels.get(source, '查看商品')}]({url})" for source, url in displayed.items())
-        if proxy_mode:
+        if originals:
             source_names = list(dict.fromkeys(
-                "Mercari Shops 日本站" if source == "jp" and x["item_id"].startswith("shops:") else labels.get(source, "Mercari")
+                labels.get(source, "Mercari")
                 for source in originals))
-            link_text += "\n來源：" + "／".join(source_names)
+            link_text = "來源：" + "／".join(source_names) + "\n" + link_text
         description = "\n".join(filter(None, [str(x["watch"]), str(x.get("review_note") or ""), str(x.get("price_note") or "")]))
         description = description[:max(0, 4096 - len(link_text) - 2)] + "\n\n" + link_text
         embed = {

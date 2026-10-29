@@ -31,7 +31,7 @@ python -m patchright install chrome
 | `DISCORD_WEBHOOK_URL` | Discord incoming Webhook 網址；使用 Discord 時設定 |
 | `DISCORD_WEBHOOK_URL_SECONDARY` | 可選的獨立 Discord 通道；只接收指定給它的條件 |
 | `DISCORD_WEBHOOK_URL_TERTIARY` | 可選的第三個獨立 Discord 通道；只接收指定給它的條件 |
-| `MERCARI_LINK_MODE` | `original`（預設）或 `buyee`；後者將 Mercari 商品的通知主連結改為 Buyee 商品頁 |
+| `MERCARI_LINK_MODE` | `original`（預設，標題連到商品原站）或 `buyee`（明確選擇以 Buyee 代購頁作主連結） |
 | `SURUGAYA_BROWSER_CHANNEL` | 選用；Windows 預設 `msedge`、Linux 預設 `chrome`。駿河屋使用獨立的有頭瀏覽器，Linux 需桌面或 Xvfb |
 | `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_USER_ID` | 使用 LINE 時須同時設定 |
 | `MONITOR_STATE_KEY` | Fernet 加密金鑰；正式保存紀錄必填 |
@@ -93,7 +93,9 @@ python -m unittest -q
 
 商品圖片由商品來源提供；缺少圖片時仍保留名稱與連結。兩站皆找到相同商品時合併連結。台灣站以新台幣顯示，日本站以日圓顯示，不自行推算匯率。圖片與商品內容需自行核對。
 
-Mercari 原站可能因瀏覽器、帳號或 App 開啟方式轉往當地入口。若使用 Buyee，可在 `.env` 與 GitHub 同名 Secret 設定 `MERCARI_LINK_MODE=buyee`，讓 Discord 商品標題、Buyee 商品頁連結與 LINE 查看按鈕直接開啟 Buyee。一般商品與具有對應日本原始網址的 Mercari Shops 商品均支援；Shops 使用經原站網址核對的 22 字元商品編號。Discord 的 Buyee 模式將原站網址放在可複製的文字欄位，來源標籤使用純文字，避免誤點原站後再度轉區。商品編號與原始來源資料保留，去重紀錄不受影響。這會選擇另一個商品入口，並不更改 Mercari 的地區設定。Yahoo 或無法確認原始商品編號的項目維持原連結；無法核對的 Shops ID 不猜測轉換。
+`MERCARI_LINK_MODE=original` 保留商品原站作為 Discord 標題及 LINE 查看按鈕的主連結。Discord 另外標示商品來源，店家刊登標為「Mercari Shops 日本站」；可核對商品編號時，另附「Buyee 代購入口（非原站）」。Buyee 是代購服務，並非商品來源，也不代表監聽新增了 Buyee 網站。
+
+Mercari 原站在使用者裝置上可能轉往當地入口。監聽程式無法只靠通知網址控制手機的網站設定或 App 開啟行為，目前沒有已驗證能在所有裝置強制留在日本站的連結。只有明確希望以 Buyee 作主入口時，才在 `.env` 與 GitHub 同名 Secret 設定 `MERCARI_LINK_MODE=buyee`；這會更換開啟的網站，並不修復 Mercari 原站轉區。該模式在 Discord 將原站網址放在可複製欄位，保留來源標示。一般商品及具有匹配日本原始網址的 22 字元 Mercari Shops 商品編號可轉換；無法核對時不猜測。商品原始資料與去重紀錄保留，其他網站維持原連結。
 
 `tw.mercari.com` 是跨境商品入口，並非台灣本地現貨市場；其台幣標價不能視為已包含全部跨境費用的到手價。不同賣家刊登同款商品仍分別通知，不以名稱相似判定同一件貨品。
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.4
+
+- Distinguish Mercari listing sources from optional Buyee proxy destinations in notifications.
+- Label Shops original links correctly in original mode and retain direct, clickable source links.
+- Clarify that selecting a proxy service does not fix Mercari's own regional redirection.
+
 ## 0.4.3
 
 - Support verified Mercari Shops identities on Buyee's native Mercari item route.

@@ -545,7 +545,7 @@ class MonitorTests(unittest.TestCase):
             expected = "https://buyee.jp/mercari/item/m100"
             embed = app.build_discord_messages([rec])[0]["embeds"][0]
             self.assertEqual(embed["url"], expected)
-            self.assertIn("[Buyee 商品頁]", embed["description"])
+            self.assertIn("[Buyee 代購入口（非原站）]", embed["description"])
             self.assertNotIn(original, embed["description"])
             self.assertIn({"name": "原站網址（僅供複製，可能轉區）", "value": "`" + original + "`", "inline": False}, embed["fields"])
             self.assertIn({"name": "日本商品編號", "value": "m100", "inline": True}, embed["fields"])
@@ -556,6 +556,20 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(rec["url"], original)
         self.assertEqual(rec["links"], {"jp": original})
         self.assertEqual(app.notification_url(rec), original)
+
+    def test_original_mode_keeps_mercari_primary_and_labels_proxy_separately(self):
+        identity = "AbCdEfGh1234567890JKLM"
+        for listing, source_label in (
+                (item("m100", url="https://jp.mercari.com/item/m100"), "Mercari 日本站"),
+                (item(identity, item_type="ITEM_TYPE_BEYOND"), "Mercari Shops 日本站")):
+            with self.subTest(source_label=source_label), patch.dict(os.environ, {"MERCARI_LINK_MODE": "original"}):
+                rec = app.to_record(listing, watch())
+                embed = app.build_discord_messages([rec])[0]["embeds"][0]
+                self.assertEqual(embed["url"], rec["url"])
+                self.assertIn("來源：" + source_label, embed["description"])
+                self.assertIn("[" + source_label + "](" + rec["url"] + ")", embed["description"])
+                self.assertIn("[Buyee 代購入口（非原站）]", embed["description"])
+                self.assertFalse(any(field["name"].startswith("原站網址") for field in embed["fields"]))
 
     def test_shops_links_use_verified_buyee_route_and_copyable_original(self):
         identity = "AbCdEfGh1234567890JKLM"
