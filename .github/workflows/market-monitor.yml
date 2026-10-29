@@ -1,8 +1,5 @@
 name: Mercari monitor
 on:
-  push:
-    branches: [main]
-    paths: [.github/workflows/market-monitor.yml]
   workflow_dispatch:
     inputs:
       source:
@@ -19,7 +16,7 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '27,57 * * * *'
 permissions:
   contents: read
 concurrency:
