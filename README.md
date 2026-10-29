@@ -30,6 +30,7 @@ python -m patchright install chrome
 | `WATCHLIST_JSON` | 私人監聽條件的 JSON 陣列；`[]` 停用監聽 |
 | `DISCORD_WEBHOOK_URL` | Discord incoming Webhook 網址；使用 Discord 時設定 |
 | `DISCORD_WEBHOOK_URL_SECONDARY` | 可選的獨立 Discord 通道；只接收指定給它的條件 |
+| `DISCORD_WEBHOOK_URL_TERTIARY` | 可選的第三個獨立 Discord 通道；只接收指定給它的條件 |
 | `MERCARI_LINK_MODE` | `original`（預設）或 `buyee`；後者將 Mercari 商品的通知主連結改為 Buyee 商品頁 |
 | `SURUGAYA_BROWSER_CHANNEL` | 選用；Windows 預設 `msedge`、Linux 預設 `chrome`。駿河屋使用獨立的有頭瀏覽器，Linux 需桌面或 Xvfb |
 | `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_USER_ID` | 使用 LINE 時須同時設定 |
@@ -68,6 +69,8 @@ WATCHLIST_JSON='[{"id":"watch-1","name":"商品A","keyword":"範例商品","keyw
 不同規則可以指定不同 Discord 通道。例如第二組在私人 JSON 中加上 `"discord_webhook_env":"DISCORD_WEBHOOK_URL_SECONDARY"`，並在 `.env`／GitHub Secret 填入同名 Webhook。只接受 `DISCORD_WEBHOOK_URL` 或 `DISCORD_WEBHOOK_URL_` 後接大寫英數與底線的名稱；增加其他名稱時，也須同步加入 workflow 的環境變數。
 
 自訂 Discord 目的地不會轉送到預設 Discord 或 LINE。目的地未設定時回報失敗，不會改送其他頻道。原有單通道去重紀錄會延續到預設通道，新通道首次建立自己的基準；同件商品若符合不同通道條件，可在各通道各收到一次。
+
+第三個目的地使用 `DISCORD_WEBHOOK_URL_TERTIARY`，並在私人條件的 `discord_webhook_env` 指定同名變數；雲端來源工作、連線測試與計時異常警告均會讀取這個可選目的地。實際分流條件與通道憑證僅放在 `.env`／Secrets。
 
 ```sh
 python mercari_watch.py --once --dry-run

@@ -97,6 +97,7 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
+          DISCORD_WEBHOOK_URL_TERTIARY: ${{ secrets.DISCORD_WEBHOOK_URL_TERTIARY }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           BOOTSTRAP: ${{ inputs.bootstrap }}
         run: |
@@ -105,7 +106,7 @@ jobs:
           prefix = '【測試】' if os.environ.get('BOOTSTRAP') == 'true' else ''
           text = prefix + '⚠️【排程異常】雲端計時設定或啟動監聽失敗，請查看執行紀錄：' + os.environ['RUN_URL']
           payload = json.dumps({'content': text, 'allowed_mentions': {'parse': []}}).encode()
-          for key in ('DISCORD_WEBHOOK_URL', 'DISCORD_WEBHOOK_URL_SECONDARY'):
+          for key in ('DISCORD_WEBHOOK_URL', 'DISCORD_WEBHOOK_URL_SECONDARY', 'DISCORD_WEBHOOK_URL_TERTIARY'):
               webhook = os.environ.get(key, '').strip()
               if not webhook:
                   continue

@@ -55,6 +55,7 @@ jobs:
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
+          DISCORD_WEBHOOK_URL_TERTIARY: ${{ secrets.DISCORD_WEBHOOK_URL_TERTIARY }}
           MERCARI_LINK_MODE: ${{ secrets.MERCARI_LINK_MODE }}
           WATCHLIST_JSON: ${{ secrets.WATCHLIST_JSON }}
           MONITOR_STATE_KEY: ${{ secrets.MONITOR_STATE_KEY }}
@@ -78,6 +79,7 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
+          DISCORD_WEBHOOK_URL_TERTIARY: ${{ secrets.DISCORD_WEBHOOK_URL_TERTIARY }}
         run: python mercari_watch.py --test-discord
       - name: Save encrypted monitor state
         if: ${{ always() && (steps.monitor.outcome == 'success' || steps.monitor.outcome == 'failure') && hashFiles('.state/seen.enc') != '' }}
@@ -111,6 +113,7 @@ jobs:
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
+          DISCORD_WEBHOOK_URL_TERTIARY: ${{ secrets.DISCORD_WEBHOOK_URL_TERTIARY }}
           MERCARI_LINK_MODE: ${{ secrets.MERCARI_LINK_MODE }}
           WATCHLIST_JSON: ${{ secrets.WATCHLIST_JSON }}
           MONITOR_STATE_KEY: ${{ secrets.MONITOR_STATE_KEY }}
