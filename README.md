@@ -1,11 +1,11 @@
 # Mercari 商品監控
 
-監聽 Mercari 日本站、台灣入口、Yahoo!フリマ與 Yahoo!オークション的新上架商品，並提供駿河屋日本站來源，透過 Discord、LINE 或兩者同時通知。搜尋使用最新排序與販賣中篩選，依來源商品編號合併結果。
+監聽 Mercari 日本站、台灣入口、Yahoo!フリマ與駿河屋日本站的一般販售商品，透過 Discord、LINE 或兩者同時通知。搜尋使用最新排序與販賣中篩選，依來源商品編號合併結果。拍賣網站已移除，Mercari 拍賣商品預設排除。
 
 - Discord 通知包含商品名稱、商品大圖、可點擊的商品連結與來源幣別價格。
 - 同件商品跨關鍵字、跨站與跨輪次去重；每個通知目的地獨立記錄。不同賣家或不同刊登編號視為不同商品。
 - 台灣站獨立讀取搜尋頁，使用「顯示可購買的商品」及「新商品」，不以日本站結果代替。
-- Yahoo!フリマ驗證服務端的最新排序及販售中條件；Yahoo!オークション驗證最新刊登順序與剩餘時間。兩站的重複刊登使用相同 ID；拍賣顯示目前價格及結標時間。
+- Yahoo!フリマ只監聽固定價刊登，驗證服務端的最新排序及販售中條件；不搜尋 Yahoo!オークション。
 - 駿河屋只使用 `www.suruga-ya.jp`，選「更新の新しい順」及「品切れ OFF」，確認本店售價後才通知；不同品況分開記錄，價格區間標示為起價。
 - 私人搜尋條件從 `.env` 或 GitHub Secrets 載入，公開的 `watchlist.json` 保持空白範本。
 - 已看紀錄加密保存，不提交商品編號、搜尋條件或執行紀錄到 Git。
@@ -45,7 +45,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 `WATCHLIST_JSON` 的通用格式如下；實際搜尋詞僅填在自己的 `.env`。JSON 可放在單引號內，正規表示式的反斜線需符合 JSON 與 dotenv 的跳脫規則。
 
 ```dotenv
-WATCHLIST_JSON='[{"id":"watch-1","name":"商品A","keyword":"範例商品","keywords":[],"sources":["jp","tw"],"source_keywords":{},"price_min":null,"price_max":null,"must_match":[],"must_not_match":[],"include_auctions":true,"review_note":"","enabled":true}]'
+WATCHLIST_JSON='[{"id":"watch-1","name":"商品A","keyword":"範例商品","keywords":[],"sources":["jp","tw"],"source_keywords":{},"price_min":null,"price_max":null,"must_match":[],"must_not_match":[],"include_auctions":false,"review_note":"","enabled":true}]'
 ```
 
 | 商品欄位 | 說明 |
@@ -54,12 +54,12 @@ WATCHLIST_JSON='[{"id":"watch-1","name":"商品A","keyword":"範例商品","keyw
 | `name` | 通知顯示名稱 |
 | `keyword` | 主要搜尋詞，必填 |
 | `keywords` | 搜尋詞陣列，逐一搜尋後合併；空陣列使用 `keyword` |
-| `sources` | 可選 `jp`、`tw`、`yahoo_fleamarket`、`yahoo_auctions`、`surugaya`；省略時維持 Mercari 日本站 |
+| `sources` | 可選 `jp`、`tw`、`yahoo_fleamarket`、`surugaya`；省略時維持 Mercari 日本站；不接受拍賣網站 |
 | `source_keywords` | 為啟用的來源分別指定搜尋詞陣列，避免每個網站都搜尋全部同義詞 |
 | `discord_webhook_env` | Discord 目的地環境變數名稱；省略使用 `DISCORD_WEBHOOK_URL` |
 | `price_min` / `price_max` | 日圓價格篩選；使用 `tw` 的條件請留 `null`，避免將台幣與日圓混用 |
 | `must_match` / `must_not_match` | 標題須符合／不得符合的正規表示式陣列 |
-| `include_auctions` | 日本站是否接受拍賣商品 |
+| `include_auctions` | 日本站是否接受拍賣商品，省略與範本均為 `false`；一般販售監聽請保持關閉 |
 | `review_note` | 人工核對提示 |
 | `enabled` | 是否啟用 |
 
@@ -108,7 +108,7 @@ Yahoo 新增來源同樣首次只建立基準，不重播既有商品。搜尋�
 
 圖片入口可能受驗證保護；只在商品需要通知時，沿網站實際圖片重新導向取得公開 CDN 網址，不猜圖片路徑。無法確認圖片時保留名稱與連結。瀏覽器 profile 保存在 `.state/surugaya-browser/`，包含瀏覽紀錄與網站 cookie，僅留本機，不提交或上傳 Actions Cache。雲端只保存原有加密去重檔；每次新 runner 都必須重新通過網站檢查。來源失敗不會變成零商品，也不建立假的基準；不保證永遠能通過驗證。不需模型 API、付費代理或解驗證服務。
 
-工作流程將原有四個來源留在 Linux，駿河屋由獨立 Windows job 執行 `--source surugaya`。兩邊分別快取 `.state/seen.enc` 與 `.state/surugaya-seen.enc`，共用私人規則與加密金鑰，各自首次建立基準；既有 Mercari／Yahoo 去重紀錄不需重置。只執行指定來源時，程式不搜尋其他來源，也保留同一狀態檔中其他來源的紀錄與健康狀態。
+工作流程將 Mercari 日本站、台灣入口與 Yahoo!フリマ留在 Linux，駿河屋由獨立 Windows job 執行 `--source surugaya`。兩邊分別快取 `.state/seen.enc` 與 `.state/surugaya-seen.enc`，共用私人規則與加密金鑰，各自首次建立基準；既有 Mercari／Yahoo 去重紀錄不需重置，停用來源的歷史也保留。只執行指定來源時，程式不搜尋其他來源，也保留同一狀態檔中其他來源的紀錄與健康狀態。
 
 ## GitHub Actions 排程
 

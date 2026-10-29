@@ -5,7 +5,7 @@ on:
       source:
         description: Limit a manual run to one source; private search rules stay in Secrets
         type: choice
-        options: [all, jp, tw, yahoo_fleamarket, yahoo_auctions, surugaya]
+        options: [all, jp, tw, yahoo_fleamarket, surugaya]
         default: all
       test_line:
         description: 發送一則純文字 LINE 連線測試
@@ -59,8 +59,8 @@ jobs:
           MONITOR_SOURCE: ${{ inputs.source }}
         run: |
           case "$MONITOR_SOURCE" in
-            ""|all) python mercari_watch.py --once --source jp --source tw --source yahoo_fleamarket --source yahoo_auctions ;;
-            jp|tw|yahoo_fleamarket|yahoo_auctions) python mercari_watch.py --once --source "$MONITOR_SOURCE" ;;
+            ""|all) python mercari_watch.py --once --source jp --source tw --source yahoo_fleamarket ;;
+            jp|tw|yahoo_fleamarket) python mercari_watch.py --once --source "$MONITOR_SOURCE" ;;
             *) exit 1 ;;
           esac
       - name: Test LINE

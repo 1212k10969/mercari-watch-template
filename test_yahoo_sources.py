@@ -61,7 +61,7 @@ class YahooTests(unittest.TestCase):
         self.assertEqual(auction.thumbnails, ["https://example.org/photo.jpg"])
         rec = app.to_record(auction, {"id": "sample", "keyword": "example"})
         self.assertEqual(list(rec["links"]), [AUCTIONS])
-        self.assertIn("Yahoo!オークション", app.build_discord_messages([rec])[0]["embeds"][0]["description"])
+        self.assertEqual(app.build_discord_messages([rec])[0]["embeds"][0]["fields"][0]["name"], "拍賣目前價格")
         self.assertEqual(self.parse(AUCTIONS, [row(AUCTIONS, auctionId="1234567890")])[0].id_, "yahoo_auctions:1234567890")
 
     def test_mirrored_listing_has_one_identity_and_no_auction(self):

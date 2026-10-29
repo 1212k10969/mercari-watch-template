@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+- Remove auction websites from supported monitor sources and workflow choices.
+- Exclude Mercari auction items by default and disable them in the shipped example.
+- Preserve encrypted listing history while limiting monitoring to fixed-sale sources.
+
 ## 0.4.0
 
 - Add the Japanese Suruga-ya storefront using Patchright and a dedicated browser profile.

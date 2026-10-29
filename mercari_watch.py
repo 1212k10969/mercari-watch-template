@@ -35,7 +35,7 @@ from yahoo_sources import YahooSearch
 from surugaya_source import SurugayaSearch
 
 BASE = Path(__file__).parent
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 WATCHLIST = BASE / "watchlist.json"
 SEEN = BASE / "seen.json"
 SEEN_KEEP = 500          # 每組條件最多記住幾個 ID
@@ -52,7 +52,7 @@ AUCTION_COLOR = "#B45309"
 DEFAULT_WEBHOOK_ENV = "DISCORD_WEBHOOK_URL"
 WEBHOOK_ENV_PATTERN = r"DISCORD_WEBHOOK_URL(?:_[A-Z0-9_]+)?"
 SOURCE_LABELS = {"jp": "Mercari 日本站", "tw": "Mercari 台灣入口",
-                 "yahoo_fleamarket": "Yahoo!フリマ", "yahoo_auctions": "Yahoo!オークション",
+                 "yahoo_fleamarket": "Yahoo!フリマ",
                  "surugaya": "駿河屋日本站"}
 
 
@@ -87,7 +87,7 @@ def item_price(it):
 
 
 def passes_filters(it, w: dict) -> bool:
-    if not w.get("include_auctions", True) and is_auction(it):
+    if not w.get("include_auctions", False) and is_auction(it):
         return False
     title = it.name or ""
     for pat in w.get("must_match", []):
@@ -113,7 +113,9 @@ async def search_new(m: Mercapi, w: dict, taiwan=None, external=None):
         if index:
             await asyncio.sleep(DELAY_BETWEEN)
         source = w.get("source", "jp")
-        if source in ("yahoo_fleamarket", "yahoo_auctions", "surugaya"):
+        if source not in SOURCE_LABELS:
+            raise ValueError("Unsupported search source")
+        if source in ("yahoo_fleamarket", "surugaya"):
             if external is None:
                 async with (SurugayaSearch() if source == "surugaya" else YahooSearch(source)) as client:
                     items = await client.search(keyword)
@@ -547,8 +549,8 @@ async def check_once(dry_run: bool = False, only_sources=None) -> int:
     source_outcomes = {}
 
     async with (TaiwanSearch() as taiwan, YahooSearch("yahoo_fleamarket") as fleamarket,
-                YahooSearch("yahoo_auctions") as auctions, SurugayaSearch() as surugaya):
-        external = {"yahoo_fleamarket": fleamarket, "yahoo_auctions": auctions, "surugaya": surugaya}
+                SurugayaSearch() as surugaya):
+        external = {"yahoo_fleamarket": fleamarket, "surugaya": surugaya}
         for w in active:
             wid = w["id"]
             route = webhook_env_for(w)

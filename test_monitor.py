@@ -20,6 +20,7 @@ def watch(**changes):
     return {"id": "sample", "name": "測試條件", "keyword": "測試",
             "keywords": [], "price_min": None, "price_max": 1000,
             "must_match": [], "must_not_match": [], "enabled": True,
+            "include_auctions": True,
             **changes}
 
 
@@ -120,6 +121,13 @@ class MonitorTests(unittest.TestCase):
         auction.highest_bid = 1000
         self.assertTrue(app.passes_filters(item(auction=auction), watch()))
         self.assertFalse(app.passes_filters(item(auction=auction), watch(include_auctions=False)))
+        default_watch = watch()
+        default_watch.pop("include_auctions")
+        self.assertFalse(app.passes_filters(item(auction=auction), default_watch))
+        client = Obj(search=AsyncMock())
+        with self.assertRaises(ValueError):
+            asyncio.run(app.search_new(client, watch(source="yahoo_auctions")))
+        client.search.assert_not_awaited()
         self.assertFalse(app.passes_filters(item(), watch(must_match=["other"])))
         self.assertFalse(app.passes_filters(item(), watch(must_not_match=["商品"])))
         self.assertFalse(app.is_auction(item(auction=Obj(bid_deadline=None))))
@@ -512,19 +520,20 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual({call.kwargs["webhook_env"] for call in send.call_args_list}, {app.DEFAULT_WEBHOOK_ENV, secondary})
         self.assertTrue(all(call.args[0]["content"].startswith("【測試】") for call in send.call_args_list))
 
-    def test_new_yahoo_sources_preserve_history_and_deduplicate_mirrors(self):
-        self.write_watches([watch(price_max=None, sources=["jp", "tw", "yahoo_fleamarket", "yahoo_auctions"])])
-        self.seen_path.write_text(json.dumps({"sample": ["old"], "_known": ["old"],
-                                             "_baselines": ["sample:jp", "sample:tw"]}))
+    def test_fleamarket_preserves_retired_source_history_without_searching_it(self):
+        self.write_watches([watch(price_max=None, sources=["jp", "tw", "yahoo_fleamarket"])])
+        self.seen_path.write_text(json.dumps({"sample": ["old"], "_known": ["old", "yahoo_auctions:a100"],
+                                             "_baselines": ["sample:jp", "sample:tw", "sample:yahoo_auctions"]}))
         first = item("yahoo_fleamarket:z100", source="yahoo_fleamarket", url="https://paypayfleamarket.yahoo.co.jp/item/z100")
-        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("old")], [item("old")], [first], [first]])), patch.object(app, "notify") as send:
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("old")], [item("old")], [first]])) as search, patch.object(app, "notify") as send:
             self.assertEqual(self.run_check(), 0)
             send.assert_not_called()
+            self.assertEqual([call.args[1]["source"] for call in search.call_args_list], ["jp", "tw", "yahoo_fleamarket"])
         state = json.loads(self.seen_path.read_text())
-        self.assertEqual(set(state["_known"]), {"old", first.id_})
+        self.assertEqual(set(state["_known"]), {"old", "yahoo_auctions:a100", first.id_})
         self.assertEqual(len(state["_baselines"]), 4)
         new = item("yahoo_fleamarket:z200", source="yahoo_fleamarket", url="https://paypayfleamarket.yahoo.co.jp/item/z200")
-        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("old")], [item("old")], [first, new], [first, new]])), patch.object(app, "notify", return_value=True) as send:
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("old")], [item("old")], [first, new]])), patch.object(app, "notify", return_value=True) as send:
             self.assertEqual(self.run_check(), 0)
         send.assert_called_once()
         self.assertEqual([record["item_id"] for record in send.call_args.args[0]], [new.id_])
