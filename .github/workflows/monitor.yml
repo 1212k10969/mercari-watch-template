@@ -31,9 +31,7 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Install search browser
         if: ${{ !inputs.test_line && !inputs.test_discord }}
-        run: |
-          python -m playwright install --with-deps chromium
-          python -m patchright install --with-deps chrome
+        run: python -m playwright install --with-deps chromium
       - name: Restore encrypted monitor state
         if: ${{ !inputs.test_line && !inputs.test_discord }}
         uses: actions/cache/restore@v4
@@ -53,7 +51,7 @@ jobs:
           WATCHLIST_JSON: ${{ secrets.WATCHLIST_JSON }}
           MONITOR_STATE_KEY: ${{ secrets.MONITOR_STATE_KEY }}
           MONITOR_STATE_PATH: .state/seen.enc
-        run: xvfb-run -a python mercari_watch.py --once
+        run: python mercari_watch.py --once --source jp --source tw --source yahoo_fleamarket --source yahoo_auctions
       - name: Test LINE
         id: test_line
         if: ${{ inputs.test_line }}
@@ -73,4 +71,41 @@ jobs:
         with:
           path: .state/seen.enc
           key: ${{ runner.os }}-mercari-private-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+  surugaya:
+    if: (github.event_name == 'workflow_dispatch' || vars.MONITOR_ENABLED == 'true') && !inputs.test_line && !inputs.test_discord
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore encrypted Japanese storefront state
+        uses: actions/cache/restore@v4
+        with:
+          path: .state/surugaya-seen.enc
+          key: ${{ runner.os }}-surugaya-private-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ runner.os }}-surugaya-private-state-v1-
+      - name: Check Japanese storefront
+        id: surugaya_monitor
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
+          MERCARI_LINK_MODE: ${{ secrets.MERCARI_LINK_MODE }}
+          WATCHLIST_JSON: ${{ secrets.WATCHLIST_JSON }}
+          MONITOR_STATE_KEY: ${{ secrets.MONITOR_STATE_KEY }}
+          MONITOR_STATE_PATH: .state/surugaya-seen.enc
+        run: python mercari_watch.py --once --source surugaya
+      - name: Save encrypted Japanese storefront state
+        if: ${{ always() && (steps.surugaya_monitor.outcome == 'success' || steps.surugaya_monitor.outcome == 'failure') && hashFiles('.state/surugaya-seen.enc') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .state/surugaya-seen.enc
+          key: ${{ runner.os }}-surugaya-private-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
 

@@ -102,11 +102,13 @@ Yahoo 新增來源同樣首次只建立基準，不重播既有商品。搜尋�
 
 ## 駿河屋日本站
 
-`surugaya` 使用 [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python) 與獨立瀏覽器 profile，已在本機 Edge 讀取原生搜尋頁。一般 HTTP 與普通無頭瀏覽器可能收到驗證頁；首頁能開啟不代表搜尋、排序、庫存與圖片皆可用。Linux GitHub runner 本次未能取得搜尋頁；Check workflow 的 `surugaya_probe` 改用 Windows／Edge，驗證搜尋與公開圖片。通過前不要假設 GitHub 雲端也能連線。
+`surugaya` 使用 [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python) 與獨立瀏覽器 profile，已在本機與 GitHub Windows／Edge runner 驗證原生搜尋與公開商品圖片。一般 HTTP、普通無頭瀏覽器與本次 Linux runner 未取得可確認的搜尋頁；首頁能開啟不代表搜尋、排序、庫存與圖片皆可用。Check workflow 的 `surugaya_probe` 可獨立檢查 Windows runner，不讀私人條件或通知憑證；網站仍可能變更驗證要求。
 
 監聽「更新的商品」，不等同首次上市；只處理本次載入的搜尋頁。網站的「品切れ OFF」仍可能包含本店缺貨但其他賣家有貨的商品，因此程式另外確認本店新品／中古售價，略過第三方獨有商品與預約品。不將定價、運費門檻、手續費或第三方最低價當作本店售價。區間價標示「起」，不同分支品況與新品／中古使用不同 ID；它們仍需人工核對內容。尚未驗證的限時特價版型會回報來源失敗，保留既有紀錄。
 
 圖片入口可能受驗證保護；只在商品需要通知時，沿網站實際圖片重新導向取得公開 CDN 網址，不猜圖片路徑。無法確認圖片時保留名稱與連結。瀏覽器 profile 保存在 `.state/surugaya-browser/`，包含瀏覽紀錄與網站 cookie，僅留本機，不提交或上傳 Actions Cache。雲端只保存原有加密去重檔；每次新 runner 都必須重新通過網站檢查。來源失敗不會變成零商品，也不建立假的基準；不保證永遠能通過驗證。不需模型 API、付費代理或解驗證服務。
+
+工作流程將原有四個來源留在 Linux，駿河屋由獨立 Windows job 執行 `--source surugaya`。兩邊分別快取 `.state/seen.enc` 與 `.state/surugaya-seen.enc`，共用私人規則與加密金鑰，各自首次建立基準；既有 Mercari／Yahoo 去重紀錄不需重置。只執行指定來源時，程式不搜尋其他來源，也保留同一狀態檔中其他來源的紀錄與健康狀態。
 
 ## GitHub Actions 排程
 
