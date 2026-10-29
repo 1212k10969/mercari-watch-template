@@ -32,7 +32,7 @@ from mercapi.requests.search import SearchRequestData
 from market_sources import TaiwanSearch
 
 BASE = Path(__file__).parent
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 WATCHLIST = BASE / "watchlist.json"
 SEEN = BASE / "seen.json"
 SEEN_KEEP = 500          # 每組條件最多記住幾個 ID
@@ -46,6 +46,8 @@ TW = timezone(timedelta(hours=8))
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 ACCENT = "#E5004F"
 AUCTION_COLOR = "#B45309"
+DEFAULT_WEBHOOK_ENV = "DISCORD_WEBHOOK_URL"
+WEBHOOK_ENV_PATTERN = r"DISCORD_WEBHOOK_URL(?:_[A-Z0-9_]+)?"
 
 
 # ---------- 搜尋 ----------
@@ -132,6 +134,7 @@ async def search_new(m: Mercapi, w: dict, taiwan=None):
 
 def to_record(it, w: dict) -> dict:
     rec = {
+        "discord_webhook_env": webhook_env_for(w),
         "item_id": item_identity(it),
         "watch": w.get("name", w["id"]),
         "keyword": w["keyword"],
@@ -231,9 +234,21 @@ def line_push(messages: list[dict]) -> bool:
     return False
 
 
-def discord_push(message: dict) -> bool:
+def webhook_env_for(value: dict) -> str:
+    name = value.get("discord_webhook_env", DEFAULT_WEBHOOK_ENV)
+    if not isinstance(name, str) or not re.fullmatch(WEBHOOK_ENV_PATTERN, name):
+        raise ValueError("Discord 目的地須使用 DISCORD_WEBHOOK_URL 或其具名環境變數")
+    return name
+
+
+def discord_push(message: dict, webhook_env: str = DEFAULT_WEBHOOK_ENV) -> bool:
     """使用 incoming webhook 發送；不在紀錄中暴露網址或回應本文。"""
-    webhook = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    try:
+        webhook_env_for({"discord_webhook_env": webhook_env})
+    except ValueError:
+        print("Discord 推播失敗：目的地設定錯誤", file=sys.stderr)
+        return False
+    webhook = os.environ.get(webhook_env, "").strip()
     if not webhook:
         print("（未設定 Discord Webhook）")
         return False
@@ -306,20 +321,22 @@ def build_discord_messages(items: list[dict]) -> list[dict]:
     return messages
 
 
-def push_notifications(line_messages: list[dict], discord_messages: list[dict]) -> bool:
+def push_notifications(line_messages: list[dict], discord_messages: list[dict],
+                       webhook_env: str = DEFAULT_WEBHOOK_ENV) -> bool:
     """各通道獨立嘗試；所有已設定通道成功才推進共用的已通知紀錄。"""
     results = []
-    if any(os.environ.get(key, "").strip() for key in ("LINE_CHANNEL_ACCESS_TOKEN", "LINE_USER_ID")):
+    webhook_env_for({"discord_webhook_env": webhook_env})
+    if webhook_env == DEFAULT_WEBHOOK_ENV and any(os.environ.get(key, "").strip() for key in ("LINE_CHANNEL_ACCESS_TOKEN", "LINE_USER_ID")):
         ok = True
         for i in range(0, len(line_messages), 5):
             if not line_push(line_messages[i:i + 5]):
                 ok = False
                 break
         results.append(ok)
-    if os.environ.get("DISCORD_WEBHOOK_URL", "").strip():
+    if os.environ.get(webhook_env, "").strip():
         ok = True
         for message in discord_messages:
-            if not discord_push(message):
+            if not discord_push(message, webhook_env=webhook_env):
                 ok = False
                 break
         results.append(ok)
@@ -332,16 +349,18 @@ def push_notifications(line_messages: list[dict], discord_messages: list[dict]) 
 def notify(new_items: list[dict]) -> bool:
     print(f"準備通知 {len(new_items)} 筆候選商品")
     # 一件商品可能符合多組搜尋，只顯示一次；分頁不丟掉超量商品。
-    by_id = {}
+    groups = {}
     for record in new_items:
+        by_id = groups.setdefault(webhook_env_for(record), {})
         identity = record.get("item_id", record["url"])
         by_id[identity] = merge_records(by_id[identity], record) if identity in by_id else record
-    unique = list(by_id.values())
-    if not unique:
-        return True
-    line_messages = [build_message(unique[i:i + MAX_CARDS])
-                     for i in range(0, len(unique), MAX_CARDS)]
-    return push_notifications(line_messages, build_discord_messages(unique))
+    results = []
+    for route, by_id in groups.items():
+        unique = list(by_id.values())
+        line_messages = [build_message(unique[i:i + MAX_CARDS])
+                         for i in range(0, len(unique), MAX_CARDS)]
+        results.append(push_notifications(line_messages, build_discord_messages(unique), route))
+    return all(results)
 
 
 def merge_records(first: dict, other: dict) -> dict:
@@ -351,9 +370,9 @@ def merge_records(first: dict, other: dict) -> dict:
     return result
 
 
-def alert(text: str) -> None:
+def alert(text: str, webhook_env: str = DEFAULT_WEBHOOK_ENV) -> None:
     print(text)
-    push_notifications([{"type": "text", "text": text}], [{"content": text[:2000]}])
+    push_notifications([{"type": "text", "text": text}], [{"content": text[:2000]}], webhook_env)
 
 
 # ---------- 主流程 ----------
@@ -408,7 +427,7 @@ def load_watchlist() -> list[dict]:
         w = dict(value)
         wid = w.get("id")
         keyword = w.get("keyword")
-        if not isinstance(wid, str) or not wid.strip() or wid == HEALTH_KEY or wid in ids:
+        if not isinstance(wid, str) or not wid.strip() or wid.startswith("_") or wid in ids:
             raise ValueError("每組商品須有不同且非空白的 id")
         if not isinstance(keyword, str) or not keyword.strip():
             raise ValueError("啟用商品須填寫 keyword")
@@ -439,6 +458,7 @@ def load_watchlist() -> list[dict]:
         for terms in source_keywords.values():
             if not isinstance(terms, list) or not terms or any(not isinstance(term, str) or not term.strip() for term in terms):
                 raise ValueError("來源搜尋詞須為非空白字串陣列")
+        webhook_env_for(w)
         ids.add(wid)
         active.append(w)
     return active
@@ -458,12 +478,19 @@ async def check_once(dry_run: bool = False) -> int:
     m = Mercapi()
     candidates, errors, searched = {}, 0, 0
     new_seen = dict(seen)
-    previous_known = set(seen.get("_known", []))
-    for wid, values in seen.items():
-        if not wid.startswith("_") and isinstance(values, list):
-            previous_known.update(values)
-    known = set(previous_known)
-    baseline_known = set(previous_known)
+    stored_routes = seen.get("_known_by_route", {})
+    if not isinstance(stored_routes, dict):
+        raise ValueError("通知通道紀錄格式錯誤")
+    known_by_route = {route: set(values) for route, values in stored_routes.items()}
+    known_by_route.setdefault(DEFAULT_WEBHOOK_ENV, set()).update(seen.get("_known", []))
+    if "_known_by_route" not in seen:
+        # Earlier releases only had one destination. Preserve its full history.
+        for wid, values in seen.items():
+            if not wid.startswith("_") and isinstance(values, list):
+                known_by_route[DEFAULT_WEBHOOK_ENV].update(values)
+    for w in active:
+        known_by_route.setdefault(webhook_env_for(w), set())
+    baseline_known = {route: set(values) for route, values in known_by_route.items()}
     baselines = list(seen.get("_baselines", []))
     baseline_records = {}
     source_outcomes = {}
@@ -471,26 +498,31 @@ async def check_once(dry_run: bool = False) -> int:
     async with TaiwanSearch() as taiwan:
         for w in active:
             wid = w["id"]
+            route = webhook_env_for(w)
+            known = known_by_route[route]
+            route_candidates = candidates.setdefault(route, {})
             for source in w.get("sources", ["jp"]):
                 source_watch = {**w, "source": source}
                 source_watch["keywords"] = w.get("source_keywords", {}).get(source, w.get("keywords", []))
                 # Legacy price bounds are JPY. Taiwan bounds must be supplied explicitly.
                 if source == "tw" and (w.get("price_min") is not None or w.get("price_max") is not None):
                     errors += 1
-                    source_outcomes.setdefault(source, []).append(False)
+                    source_outcomes.setdefault((route, source), []).append(False)
                     print("tw 搜尋失敗：台灣來源請使用不限價條件", file=sys.stderr)
                     continue
                 try:
                     items = await search_new(m, source_watch, taiwan)
                     searched += 1
-                    source_outcomes.setdefault(source, []).append(True)
+                    source_outcomes.setdefault((route, source), []).append(True)
                 except Exception as e:
                     errors += 1
-                    source_outcomes.setdefault(source, []).append(False)
+                    source_outcomes.setdefault((route, source), []).append(False)
                     print(f"{source} 搜尋失敗：{type(e).__name__}", file=sys.stderr)
                     continue
                 token = wid + ":" + source
-                legacy_jp = source == "jp" and wid in seen and "_baselines" not in seen
+                if route != DEFAULT_WEBHOOK_ENV:
+                    token = route + ":" + token
+                legacy_jp = route == DEFAULT_WEBHOOK_ENV and source == "jp" and wid in seen and "_baselines" not in seen
                 first_run = token not in baselines and not legacy_jp
                 identities = [item_identity(it) for it in items]
                 count = sum(identity not in known for identity in identities)
@@ -499,15 +531,15 @@ async def check_once(dry_run: bool = False) -> int:
                 if token not in baselines:
                     baselines.append(token)
                 if first_run:
-                    baseline_ids = [identity for identity in identities if identity not in candidates]
-                    baseline_known.update(baseline_ids)
-                    baseline_records.setdefault(wid, []).extend(baseline_ids)
+                    baseline_ids = [identity for identity in identities if identity not in route_candidates]
+                    baseline_known[route].update(baseline_ids)
+                    baseline_records.setdefault(route, {}).setdefault(wid, []).extend(baseline_ids)
                 for it in items:
                     identity = item_identity(it)
-                    if identity in candidates:
-                        candidates[identity] = merge_records(candidates[identity], to_record(it, w))
+                    if identity in route_candidates:
+                        route_candidates[identity] = merge_records(route_candidates[identity], to_record(it, w))
                     elif not first_run and identity not in known:
-                        candidates[identity] = to_record(it, w)
+                        route_candidates[identity] = to_record(it, w)
                     known.add(identity)
                 previous_ids = new_seen.get(wid, [])
                 fresh_ids = [identity for identity in identities if identity not in previous_ids]
@@ -515,18 +547,24 @@ async def check_once(dry_run: bool = False) -> int:
                 await asyncio.sleep(DELAY_BETWEEN)
 
     if dry_run:
-        print(f"試跑完成：{len(candidates)} 筆新品候選，不通知、不保存。")
+        print(f"試跑完成：{sum(len(items) for items in candidates.values())} 筆新品候選，不通知、不保存。")
         return errors
 
-    # 所有已設定通道送出成功（或沒有新品）才記成「已通知」；失敗保留舊紀錄，下一輪重送
-    if candidates and not notify(list(candidates.values())):
-        reverted = dict(seen)
-        for wid, identities in baseline_records.items():
-            reverted[wid] = list(dict.fromkeys(identities + seen.get(wid, [])))[:SEEN_KEEP]
-        new_seen = reverted
-        known = baseline_known
-        errors += 1
-    new_seen["_known"] = sorted(known)
+    # A failed destination must not roll back a different successful destination.
+    for route, items in candidates.items():
+        if items and not notify(list(items.values())):
+            for w in active:
+                if webhook_env_for(w) == route:
+                    if w["id"] in seen:
+                        new_seen[w["id"]] = seen[w["id"]]
+                    else:
+                        new_seen.pop(w["id"], None)
+            for wid, identities in baseline_records.get(route, {}).items():
+                new_seen[wid] = list(dict.fromkeys(identities + seen.get(wid, [])))[:SEEN_KEEP]
+            known_by_route[route] = baseline_known[route]
+            errors += 1
+    new_seen["_known_by_route"] = {route: sorted(values) for route, values in known_by_route.items()}
+    new_seen["_known"] = sorted(known_by_route[DEFAULT_WEBHOOK_ENV])
     new_seen["_baselines"] = baselines
 
     # 健康狀態：全部搜尋都失敗才算一次失敗
@@ -537,18 +575,19 @@ async def check_once(dry_run: bool = False) -> int:
         health = {"fails": 0, "alerted": False}
     providers = seen.get(HEALTH_KEY, {}).get("sources", {})
     health["sources"] = {}
-    for source, outcomes in source_outcomes.items():
-        previous = providers.get(source, {"fails": 0, "alerted": False})
+    for (route, source), outcomes in source_outcomes.items():
+        key = source if route == DEFAULT_WEBHOOK_ENV else route + ":" + source
+        previous = providers.get(key, {"fails": 0, "alerted": False})
         if all(outcomes):
             if previous.get("alerted"):
-                alert(f"✅ Mercari {source} 來源已恢復正常。")
-            health["sources"][source] = {"fails": 0, "alerted": False}
+                alert(f"✅ Mercari {source} 來源已恢復正常。", webhook_env=route)
+            health["sources"][key] = {"fails": 0, "alerted": False}
         else:
             current = {"fails": previous.get("fails", 0) + 1, "alerted": previous.get("alerted", False)}
             if current["fails"] >= ALERT_AFTER and not current["alerted"]:
-                alert(f"⚠️ Mercari {source} 來源已連續 {current['fails']} 次搜尋失敗，請查看執行紀錄。")
+                alert(f"⚠️ Mercari {source} 來源已連續 {current['fails']} 次搜尋失敗，請查看執行紀錄。", webhook_env=route)
                 current["alerted"] = True
-            health["sources"][source] = current
+            health["sources"][key] = current
     new_seen[HEALTH_KEY] = health
 
     save_state(new_seen)
@@ -563,8 +602,11 @@ async def test_line() -> int:
 
 async def test_discord() -> int:
     """只測試 Discord，不搜尋商品、不修改紀錄。"""
-    ok = discord_push({"content": "【測試】Mercari Discord 通知連線成功"})
-    return 0 if ok else 1
+    routes = sorted(name for name, value in os.environ.items()
+                    if value.strip() and re.fullmatch(WEBHOOK_ENV_PATTERN, name))
+    results = [discord_push({"content": "【測試】Mercari Discord 通知連線成功"}, webhook_env=route)
+               for route in (routes or [DEFAULT_WEBHOOK_ENV])]
+    return 0 if all(results) else 1
 
 
 def main():

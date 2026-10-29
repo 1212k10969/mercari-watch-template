@@ -11,7 +11,7 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: '7,37 * * * *'
+    - cron: '13,43 * * * *'
 permissions:
   contents: read
 concurrency:
@@ -46,6 +46,7 @@ jobs:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
           WATCHLIST_JSON: ${{ secrets.WATCHLIST_JSON }}
           MONITOR_STATE_KEY: ${{ secrets.MONITOR_STATE_KEY }}
           MONITOR_STATE_PATH: .state/seen.enc
@@ -61,6 +62,7 @@ jobs:
         if: ${{ !cancelled() && inputs.test_discord && (success() || steps.test_line.outcome == 'failure') }}
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
         run: python mercari_watch.py --test-discord
       - name: Save encrypted monitor state
         if: ${{ always() && (steps.monitor.outcome == 'success' || steps.monitor.outcome == 'failure') && hashFiles('.state/seen.enc') != '' }}

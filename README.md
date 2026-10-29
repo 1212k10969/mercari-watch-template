@@ -3,7 +3,7 @@
 監聽日本站與台灣站的新上架商品，透過 Discord、LINE 或兩者同時通知。搜尋固定使用最新排序與販賣中篩選，依原始商品編號合併結果。
 
 - Discord 通知包含商品名稱、商品大圖、可點擊的商品連結與來源幣別價格。
-- 同件商品跨關鍵字、跨站與跨輪次去重；不同賣家或不同刊登編號視為不同商品。
+- 同件商品跨關鍵字、跨站與跨輪次去重；每個通知目的地獨立記錄。不同賣家或不同刊登編號視為不同商品。
 - 台灣站獨立讀取搜尋頁，使用「顯示可購買的商品」及「新商品」，不以日本站結果代替。
 - 私人搜尋條件從 `.env` 或 GitHub Secrets 載入，公開的 `watchlist.json` 保持空白範本。
 - 已看紀錄加密保存，不提交商品編號、搜尋條件或執行紀錄到 Git。
@@ -25,6 +25,7 @@ python -m playwright install chromium
 | --- | --- |
 | `WATCHLIST_JSON` | 私人監聽條件的 JSON 陣列；`[]` 停用監聽 |
 | `DISCORD_WEBHOOK_URL` | Discord incoming Webhook 網址；使用 Discord 時設定 |
+| `DISCORD_WEBHOOK_URL_SECONDARY` | 可選的獨立 Discord 通道；只接收指定給它的條件 |
 | `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_USER_ID` | 使用 LINE 時須同時設定 |
 | `MONITOR_STATE_KEY` | Fernet 加密金鑰；正式保存紀錄必填 |
 | `MONITOR_STATE_PATH` | 加密紀錄位置，預設 `.state/seen.enc` |
@@ -49,6 +50,7 @@ WATCHLIST_JSON='[{"id":"watch-1","name":"商品A","keyword":"範例商品","keyw
 | `keywords` | 搜尋詞陣列，逐一搜尋後合併；空陣列使用 `keyword` |
 | `sources` | `["jp"]`、`["tw"]` 或兩者；省略時維持日本站 |
 | `source_keywords` | 可為 `jp`、`tw` 分別指定搜尋詞陣列 |
+| `discord_webhook_env` | Discord 目的地環境變數名稱；省略使用 `DISCORD_WEBHOOK_URL` |
 | `price_min` / `price_max` | 日本站日圓篩選；使用台灣站的條件請留 `null`，避免將台幣與日圓混用 |
 | `must_match` / `must_not_match` | 標題須符合／不得符合的正規表示式陣列 |
 | `include_auctions` | 日本站是否接受拍賣商品 |
@@ -56,6 +58,10 @@ WATCHLIST_JSON='[{"id":"watch-1","name":"商品A","keyword":"範例商品","keyw
 | `enabled` | 是否啟用 |
 
 首次成功搜尋每一組條件與來源時，只建立基準。之後出現的新商品才通知；單一來源失敗時保留該來源紀錄，其他來源仍會處理。未啟用條件時不搜尋、不推播、不寫入紀錄。
+
+不同規則可以指定不同 Discord 通道。例如第二組在私人 JSON 中加上 `"discord_webhook_env":"DISCORD_WEBHOOK_URL_SECONDARY"`，並在 `.env`／GitHub Secret 填入同名 Webhook。只接受 `DISCORD_WEBHOOK_URL` 或 `DISCORD_WEBHOOK_URL_` 後接大寫英數與底線的名稱；增加其他名稱時，也須同步加入 workflow 的環境變數。
+
+自訂 Discord 目的地不會轉送到預設 Discord 或 LINE。目的地未設定時回報失敗，不會改送其他頻道。原有單通道去重紀錄會延續到預設通道，新通道首次建立自己的基準；同件商品若符合不同通道條件，可在各通道各收到一次。
 
 ```sh
 python mercari_watch.py --once --dry-run
@@ -65,7 +71,7 @@ python mercari_watch.py --once
 python -m unittest -q
 ```
 
-測試通知只發送純文字，不搜尋商品或修改去重紀錄。試跑不發通知、不保存紀錄。
+測試通知以「【測試】」開頭，只發送純文字，不搜尋商品或修改去重紀錄；`--test-discord` 會測試所有已設定的 Discord 通道。試跑不發通知、不保存紀錄。
 
 ## Discord 設定
 
@@ -86,7 +92,7 @@ python -m unittest -q
 
 去重紀錄只以 Fernet 加密檔存入 Actions Cache，金鑰保存在 Secrets；工作流程不再提交 `seen.json`。快取可能遭清除，缺少紀錄時會重新建立基準，不將現有商品整批推送。請保留加密金鑰，變更金鑰前需先清除舊加密紀錄。
 
-所有已設定通道都成功，才記為已通知；任何通道失敗則下輪重送。雙通道部分成功、分批中途失敗或送達後連線中斷時，先前成功的訊息可能重複。Discord 限流依服務回傳時間做有限次重試。
+各目的地獨立保存發送結果，失敗只重試該目的地，成功目的地不受影響。預設目的地若同時設定 LINE 與 Discord，仍須兩者都成功才推進該目的地紀錄；其中一邊成功、分批中途失敗或送達後連線中斷時，該目的地先前成功的訊息可能重複。來源異常與恢復訊息也會送往對應目的地。Discord 限流依服務回傳時間做有限次重試。
 
 Discord Webhook 基本功能不需 Nitro。公開專案使用標準 GitHub-hosted runner 免費；私人專案受帳號免費額度與超額計費規則限制。[Discord 說明](https://discord.com/safety/using-webhooks-and-embeds)、[GitHub 計費](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
 

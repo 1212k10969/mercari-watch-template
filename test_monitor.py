@@ -83,7 +83,10 @@ class MonitorTests(unittest.TestCase):
                       [watch(keywords=[""])], [watch(sources=[])],
                       [watch(sources=["other"])], [watch(sources=["jp", "jp"])],
                       [watch(source_keywords={"tw": ["example"]})],
-                      [watch(sources=["tw"], source_keywords={"tw": []})]]
+                      [watch(sources=["tw"], source_keywords={"tw": []})],
+                      [watch(discord_webhook_env="GITHUB_TOKEN")],
+                      [watch(discord_webhook_env="DISCORD_WEBHOOK_URL_bad")],
+                      [watch(id="_known_by_route")]]
         for values in bad_values:
             self.write_watches(values)
             with patch.object(app, "Mercapi") as client:
@@ -403,6 +406,78 @@ class MonitorTests(unittest.TestCase):
         with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[item("m123")], [tw]])), patch.object(app, "notify", return_value=True) as send:
             self.assertEqual(self.run_check(), 0)
         self.assertEqual(len(send.call_args.args[0]), 1)
+
+    def test_custom_destination_missing_never_falls_back(self):
+        secondary = "DISCORD_WEBHOOK_URL_SECONDARY"
+        record = app.to_record(item(), watch(discord_webhook_env=secondary))
+        with patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/1/private"}), patch.object(app, "line_push") as line, patch.object(app, "discord_push") as discord, contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(app.notify([record]))
+        line.assert_not_called()
+        discord.assert_not_called()
+        self.assertEqual(record["discord_webhook_env"], secondary)
+        self.assertNotIn("/webhooks/1/private", json.dumps(record))
+
+    def test_notifications_group_same_item_by_destination(self):
+        secondary = "DISCORD_WEBHOOK_URL_SECONDARY"
+        first = app.to_record(item(), watch())
+        second = app.to_record(item(), watch(discord_webhook_env=secondary))
+        with patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "first", secondary: "second"}), patch.object(app, "line_push", return_value=True) as line, patch.object(app, "discord_push", return_value=True) as discord, contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(app.notify([first, second, first, second]))
+        self.assertEqual(discord.call_count, 2)
+        self.assertEqual({call.kwargs["webhook_env"] for call in discord.call_args_list}, {app.DEFAULT_WEBHOOK_ENV, secondary})
+        line.assert_called_once()
+
+    def test_legacy_history_migrates_and_destinations_remain_independent(self):
+        primary, secondary = app.DEFAULT_WEBHOOK_ENV, "DISCORD_WEBHOOK_URL_SECONDARY"
+        self.write_watches([watch(id="first"), watch(id="second", discord_webhook_env=secondary)])
+        self.seen_path.write_text(json.dumps({"first": ["one"], "_known": ["one"], "_baselines": ["first:jp"]}))
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item()])), patch.object(app, "notify") as send:
+            self.assertEqual(self.run_check(), 0)
+        send.assert_not_called()
+        state = json.loads(self.seen_path.read_text())
+        self.assertEqual(state["_known_by_route"][primary], ["one"])
+        self.assertEqual(state["_known_by_route"][secondary], ["one"])
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item("two")])), patch.object(app, "notify", return_value=True) as send:
+            self.assertEqual(self.run_check(), 0)
+        self.assertEqual(send.call_count, 2)
+        self.assertEqual({call.args[0][0]["discord_webhook_env"] for call in send.call_args_list}, {primary, secondary})
+
+    def test_destination_failure_does_not_replay_successful_destination(self):
+        primary, secondary = app.DEFAULT_WEBHOOK_ENV, "DISCORD_WEBHOOK_URL_SECONDARY"
+        self.write_watches([watch(id="first"), watch(id="second", discord_webhook_env=secondary)])
+        for outcomes in ((False, True), (True, False)):
+            with self.subTest(outcomes=outcomes):
+                self.seen_path.write_text(json.dumps({"first": [], "second": [], "_known": [],
+                    "_known_by_route": {primary: [], secondary: []},
+                    "_baselines": ["first:jp", secondary + ":second:jp"]}))
+                with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item()])), patch.object(app, "notify", side_effect=outcomes):
+                    self.assertEqual(self.run_check(), 1)
+                state = json.loads(self.seen_path.read_text())
+                for route, success in zip((primary, secondary), outcomes):
+                    self.assertEqual(state["_known_by_route"][route], ["one"] if success else [])
+                with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item()])), patch.object(app, "notify", return_value=True) as send:
+                    self.assertEqual(self.run_check(), 0)
+                send.assert_called_once()
+                failed_route = primary if not outcomes[0] else secondary
+                self.assertEqual(send.call_args.args[0][0]["discord_webhook_env"], failed_route)
+
+    def test_provider_health_alert_uses_affected_destination(self):
+        secondary = "DISCORD_WEBHOOK_URL_SECONDARY"
+        self.write_watches([watch(id="first"), watch(id="second", discord_webhook_env=secondary)])
+        self.seen_path.write_text(json.dumps({"_health": {"fails": 0, "alerted": False,
+            "sources": {secondary + ":jp": {"fails": 2, "alerted": False}}}}))
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(side_effect=[[], RuntimeError("private")])), patch.object(app, "alert") as send, contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.run_check(), 1)
+        send.assert_called_once()
+        self.assertEqual(send.call_args.kwargs["webhook_env"], secondary)
+
+    def test_discord_test_covers_each_configured_destination(self):
+        secondary = "DISCORD_WEBHOOK_URL_SECONDARY"
+        with patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "first", secondary: "second"}), patch.object(app, "discord_push", return_value=True) as send:
+            self.assertEqual(asyncio.run(app.test_discord()), 0)
+        self.assertEqual(send.call_count, 2)
+        self.assertEqual({call.kwargs["webhook_env"] for call in send.call_args_list}, {app.DEFAULT_WEBHOOK_ENV, secondary})
+        self.assertTrue(all(call.args[0]["content"].startswith("【測試】") for call in send.call_args_list))
 
 
 if __name__ == "__main__":
