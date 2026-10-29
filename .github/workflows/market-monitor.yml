@@ -1,7 +1,12 @@
 name: Mercari monitor
+run-name: ${{ inputs.clock_run_id && format('Automatic monitor from clock {0}', inputs.clock_run_id) || 'Market monitor' }}
 on:
   workflow_dispatch:
     inputs:
+      clock_run_id:
+        description: Parent cloud clock run; leave empty for manual runs
+        type: string
+        default: ''
       source:
         description: Limit a manual run to one source; private search rules stay in Secrets
         type: choice
@@ -24,7 +29,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   monitor:
-    if: (github.event_name == 'workflow_dispatch' || vars.MONITOR_ENABLED == 'true') && (inputs.source != 'surugaya' || inputs.test_line || inputs.test_discord)
+    if: (github.event_name == 'workflow_dispatch' || vars.MONITOR_ENABLED == 'true') && (!inputs.clock_run_id || vars.MONITOR_ENABLED == 'true') && (inputs.source != 'surugaya' || inputs.test_line || inputs.test_discord)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -83,7 +88,7 @@ jobs:
           path: .state/seen.enc
           key: ${{ runner.os }}-mercari-private-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
   surugaya:
-    if: (github.event_name == 'workflow_dispatch' || vars.MONITOR_ENABLED == 'true') && !inputs.test_line && !inputs.test_discord && (!inputs.source || inputs.source == 'all' || inputs.source == 'surugaya')
+    if: (github.event_name == 'workflow_dispatch' || vars.MONITOR_ENABLED == 'true') && (!inputs.clock_run_id || vars.MONITOR_ENABLED == 'true') && !inputs.test_line && !inputs.test_discord && (!inputs.source || inputs.source == 'all' || inputs.source == 'surugaya')
     runs-on: windows-latest
     timeout-minutes: 10
     env:

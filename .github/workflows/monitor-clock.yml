@@ -1,0 +1,89 @@
+name: Monitor clock
+run-name: ${{ inputs.bootstrap && 'Cloud clock verification' || format('Cloud clock after {0}', inputs.previous_run_id || 'manual start') }}
+on:
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: Verify one automatic handoff with a one-minute timer; following cycles use thirty minutes
+        type: boolean
+        default: false
+      previous_run_id:
+        description: Parent clock run, populated automatically
+        type: string
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: mercari-monitor-clock
+  cancel-in-progress: false
+jobs:
+  monitor:
+    if: vars.MONITOR_ENABLED == 'true' && !inputs.bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Start market monitor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          for attempt in 1 2 3; do
+            if gh workflow run market-monitor.yml --repo "$REPOSITORY" --ref main -f source=all -f clock_run_id="$GITHUB_RUN_ID"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
+  next:
+    if: vars.MONITOR_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: write
+    environment:
+      name: ${{ inputs.bootstrap && 'monitor-clock-bootstrap' || 'monitor-clock-30m' }}
+    steps:
+      - name: Start next clock after the server-side timer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          for attempt in 1 2 3; do
+            if gh workflow run monitor-clock.yml --repo "$REPOSITORY" --ref main -f bootstrap=false -f previous_run_id="$GITHUB_RUN_ID"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
+  report_failure:
+    needs: [monitor, next]
+    if: always() && (needs.monitor.result == 'failure' || needs.next.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Report clock failure
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          text = '⚠️【排程異常】雲端計時或啟動監聽失敗，請查看執行紀錄：' + os.environ['RUN_URL']
+          payload = json.dumps({'content': text, 'allowed_mentions': {'parse': []}}).encode()
+          for key in ('DISCORD_WEBHOOK_URL', 'DISCORD_WEBHOOK_URL_SECONDARY'):
+              webhook = os.environ.get(key, '').strip()
+              if not webhook:
+                  continue
+              try:
+                  request = urllib.request.Request(webhook, data=payload, headers={'Content-Type': 'application/json'})
+                  with urllib.request.urlopen(request, timeout=15):
+                      pass
+              except Exception:
+                  print('Clock alert delivery failed; inspect this workflow run.')
+          PY
