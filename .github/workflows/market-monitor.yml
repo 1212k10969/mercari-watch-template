@@ -20,8 +20,6 @@ on:
         description: 發送一則純文字 Discord 連線測試
         type: boolean
         default: false
-  schedule:
-    - cron: '27,57 * * * *'
 permissions:
   contents: read
 concurrency:

@@ -110,15 +110,18 @@ Yahoo 新增來源同樣首次只建立基準，不重播既有商品。搜尋�
 
 工作流程將 Mercari 日本站、台灣入口與 Yahoo!フリマ留在 Linux，駿河屋由獨立 Windows job 執行 `--source surugaya`。兩邊分別快取 `.state/seen.enc` 與 `.state/surugaya-seen.enc`，共用私人規則與加密金鑰，各自首次建立基準；既有 Mercari／Yahoo 去重紀錄不需重置，停用來源的歷史也保留。只執行指定來源時，程式不搜尋其他來源，也保留同一狀態檔中其他來源的紀錄與健康狀態。
 
-## GitHub Actions 排程
+## GitHub 雲端排程
 
 1. 使用自己的 repository。公開 fork 中只保留程式與範本。
 2. 在 Settings → Secrets and variables → Actions → Secrets 設定 `WATCHLIST_JSON`、`MONITOR_STATE_KEY`，以及通知通道憑證。至少設定一種通知通道。
-3. 到 Actions → Mercari monitor → Run workflow；勾選 `test_discord` 或 `test_line` 可先測試通知。`source` 預設 `all`，也可選單一來源以重查失敗來源，搜尋詞仍只從 Secrets 讀取。
-4. 在 Variables 設定 `MONITOR_ENABLED=true`，啟用每 30 分鐘檢查（每小時第 27、57 分）；設為 `false` 停止排程。GitHub 排程可能延遲。
-5. 從執行結果確認各來源的成功／失敗狀態；被拒絕、驗證頁或無法確認篩選條件，都視為搜尋失敗。
+3. 在 Settings → Environments 建立 `monitor-clock-30m`，設定 Wait timer 為 **30 分鐘**；再建立 `monitor-clock-bootstrap`，Wait timer 為 **1 分鐘**。兩者均不設定 required reviewers。這些名稱只表示計時間隔，不包含私人條件。
+4. 在 Variables 設定 `MONITOR_ENABLED=true`，到 Actions → **Monitor clock** → Run workflow；正常啟動保持 `bootstrap=false`。雲端計時器每輪自動啟動監聽，再接續下一輪，間隔約 30 分鐘，仍可能受 GitHub 排隊時間影響。首次驗收可用 `bootstrap=true`，先以一分鐘計時自動交接；下一輪固定使用正式 30 分鐘計時。
+5. 看 [雲端計時紀錄](https://github.com/danny0926/mercari-watch-template/actions/workflows/monitor-clock.yml) 的等待狀態與下一輪，以及 [監聽執行紀錄](https://github.com/danny0926/mercari-watch-template/actions/workflows/market-monitor.yml)。自動監聽標題為 `Automatic monitor from clock …`，對應父計時 run。`workflow_dispatch` 可由使用者或雲端程式呼叫；事件名稱本身不能區分手動與自動，應連同父計時紀錄、觸發者及時間查看。
+6. 單次檢查或通知測試仍使用 **Mercari monitor** → Run workflow；勾選 `test_discord` 或 `test_line` 可測試通知。`source` 可限制單一來源，搜尋詞仍只從 Secrets 讀取。來源失敗會保留其紀錄，其他來源繼續處理。
 
-是否自動啟動，請看 [自動排程執行紀錄](https://github.com/danny0926/mercari-watch-template/actions/workflows/market-monitor.yml?query=event%3Aschedule)，或執行 `gh run list --workflow market-monitor.yml --event schedule`。`schedule` 是排程事件，手動 Run workflow 會顯示 `workflow_dispatch`。設定了 cron、workflow 顯示 active 或手動執行成功，均不能證明自動排程已運作。來源異常警報須在程式實際啟動後才有機會發送，因此還需檢查排程紀錄的時間；沒有新品通知也不能單獨作為排程狀態依據。
+原生 cron 在本次實際觀察期間沒有產生 `schedule` 事件，因此正式流程已改用 GitHub environment wait timer，不將「設定了 cron」當作排程成功。等待由 GitHub 處理，無須本機保持開機，也不呼叫模型；等待期間不計入執行計費時間，見 [GitHub 官方說明](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)。計時流程只使用目前 repo 的 `GITHUB_TOKEN`，不需要額外 PAT。請先設定 environment；程式會核對等候時間，缺少或不符時停止並告警，避免連續快速啟動。
+
+停止時將 `MONITOR_ENABLED=false`；若要立即終止等待，也可取消 **Monitor clock** 正在等待的 run。已開始的來源工作可自行完成。重啟時設回 `true`，再執行一次 **Monitor clock**。工作被取消、workflow 被停用或持續 API 故障可能中斷接力；計時設定或交接失敗會向已設定的 Discord 通道發送警告，但故意取消不當作故障。來源健康警報只在程式啟動後運作，仍應核對最近的計時與監聽時間。
 
 去重紀錄只以 Fernet 加密檔存入 Actions Cache，金鑰保存在 Secrets；工作流程不再提交 `seen.json`。快取可能遭清除，缺少紀錄時會重新建立基準，不將現有商品整批推送。請保留加密金鑰，變更金鑰前需先清除舊加密紀錄。
 

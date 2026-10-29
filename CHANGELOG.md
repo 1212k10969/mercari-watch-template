@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2
+
+- Replace the unverified native cron with a GitHub-hosted environment wait timer and automatic workflow handoff.
+- Verify timer configuration before dispatching; refuse missing timers and required-reviewer gates instead of creating a rapid loop.
+- Trace automatic monitor runs to their parent clock and report clock failures to configured Discord destinations.
+- Preserve separate encrypted source caches and fixed-sale filtering across the workflow registration change.
+- Document cloud-clock setup, stopping, restarting and actual automatic-run evidence.
+
 ## 0.4.1
 
 - Remove auction websites from supported monitor sources and workflow choices.

@@ -17,7 +17,33 @@ concurrency:
   group: mercari-monitor-clock
   cancel-in-progress: false
 jobs:
+  validate:
+    if: vars.MONITOR_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Require the configured server-side timer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TIMER_ENVIRONMENT: ${{ inputs.bootstrap && 'monitor-clock-bootstrap' || 'monitor-clock-30m' }}
+          EXPECTED_WAIT: ${{ inputs.bootstrap && '1' || '30' }}
+        run: |
+          gh api "repos/$REPOSITORY/environments/$TIMER_ENVIRONMENT" > timer.json
+          python - <<'PY'
+          import json, os
+          with open('timer.json', encoding='utf-8') as source:
+              rules = json.load(source).get('protection_rules', [])
+          waits = [r.get('wait_timer') for r in rules if r.get('type') == 'wait_timer']
+          if waits != [int(os.environ['EXPECTED_WAIT'])] or any(r.get('type') == 'required_reviewers' for r in rules):
+              raise SystemExit('Configure the expected wait timer without required reviewers before starting the clock.')
+          print('Verified cloud timer:', os.environ['EXPECTED_WAIT'], 'minutes')
+          PY
   monitor:
+    needs: validate
     if: vars.MONITOR_ENABLED == 'true' && !inputs.bootstrap
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -38,6 +64,7 @@ jobs:
           done
           exit 1
   next:
+    needs: validate
     if: vars.MONITOR_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -60,8 +87,8 @@ jobs:
           done
           exit 1
   report_failure:
-    needs: [monitor, next]
-    if: always() && (needs.monitor.result == 'failure' || needs.next.result == 'failure')
+    needs: [validate, monitor, next]
+    if: always() && (needs.validate.result == 'failure' || needs.monitor.result == 'failure' || needs.next.result == 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions: {}
@@ -71,10 +98,12 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BOOTSTRAP: ${{ inputs.bootstrap }}
         run: |
           python - <<'PY'
           import json, os, urllib.request
-          text = '⚠️【排程異常】雲端計時或啟動監聽失敗，請查看執行紀錄：' + os.environ['RUN_URL']
+          prefix = '【測試】' if os.environ.get('BOOTSTRAP') == 'true' else ''
+          text = prefix + '⚠️【排程異常】雲端計時設定或啟動監聽失敗，請查看執行紀錄：' + os.environ['RUN_URL']
           payload = json.dumps({'content': text, 'allowed_mentions': {'parse': []}}).encode()
           for key in ('DISCORD_WEBHOOK_URL', 'DISCORD_WEBHOOK_URL_SECONDARY'):
               webhook = os.environ.get(key, '').strip()

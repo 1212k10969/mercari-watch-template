@@ -35,7 +35,7 @@ from yahoo_sources import YahooSearch
 from surugaya_source import SurugayaSearch
 
 BASE = Path(__file__).parent
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 WATCHLIST = BASE / "watchlist.json"
 SEEN = BASE / "seen.json"
 SEEN_KEEP = 500          # 每組條件最多記住幾個 ID
