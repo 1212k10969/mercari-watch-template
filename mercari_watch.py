@@ -508,8 +508,14 @@ def load_watchlist() -> list[dict]:
     return active
 
 
-async def check_once(dry_run: bool = False) -> int:
+async def check_once(dry_run: bool = False, only_sources=None) -> int:
     active = load_watchlist()
+    if only_sources:
+        selected = set(only_sources)
+        if not selected <= SOURCE_LABELS.keys():
+            raise ValueError("Unsupported source selection")
+        active = [{**w, "sources": [s for s in w.get("sources", ["jp"]) if s in selected]}
+                  for w in active if selected.intersection(w.get("sources", ["jp"]))]
     if not active:
         print("尚未啟用商品設定；不搜尋、不通知。")
         return 0
@@ -623,7 +629,7 @@ async def check_once(dry_run: bool = False) -> int:
     else:
         health = {"fails": 0, "alerted": False}
     providers = seen.get(HEALTH_KEY, {}).get("sources", {})
-    health["sources"] = {}
+    health["sources"] = dict(providers) if only_sources else {}
     for (route, source), outcomes in source_outcomes.items():
         key = source if route == DEFAULT_WEBHOOK_ENV else route + ":" + source
         previous = providers.get(key, {"fails": 0, "alerted": False})
@@ -666,6 +672,7 @@ def main():
     ap.add_argument("--version", action="version", version=VERSION)
     ap.add_argument("--once", action="store_true", help="只檢查一次")
     ap.add_argument("--dry-run", action="store_true", help="不發通知、不寫入 seen.json")
+    ap.add_argument("--source", action="append", choices=SOURCE_LABELS, help="只檢查指定來源，可重複指定")
     ap.add_argument("--test-line", action="store_true", help="發一則 LINE 測試通知")
     ap.add_argument("--test-discord", action="store_true", help="發一則 Discord 測試通知")
     a = ap.parse_args()
@@ -679,7 +686,7 @@ def main():
         sys.exit(1 if any(results) else 0)
     if a.once or a.dry_run:
         try:
-            errors = asyncio.run(check_once(a.dry_run))
+            errors = asyncio.run(check_once(a.dry_run, a.source))
         except Exception as e:
             print(f"監控未完成：{type(e).__name__}", file=sys.stderr)
             sys.exit(1)

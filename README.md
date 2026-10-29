@@ -74,6 +74,8 @@ python mercari_watch.py --once --dry-run
 python mercari_watch.py --test-discord
 python mercari_watch.py --test-line
 python mercari_watch.py --once
+# 只執行某來源，私人條件仍從 .env 載入：
+python mercari_watch.py --once --source surugaya
 python -m unittest -q
 ```
 
@@ -100,7 +102,7 @@ Yahoo 新增來源同樣首次只建立基準，不重播既有商品。搜尋�
 
 ## 駿河屋日本站
 
-`surugaya` 使用 [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python) 與獨立瀏覽器 profile，已在本機 Edge 讀取原生搜尋頁。一般 HTTP 與普通無頭瀏覽器可能收到驗證頁；首頁能開啟不代表搜尋、排序、庫存與圖片皆可用。使用前可手動執行 Check workflow 的 `surugaya_probe`，從實際 runner 驗證搜尋與公開圖片；通過前不要假設 GitHub 雲端也能連線。
+`surugaya` 使用 [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python) 與獨立瀏覽器 profile，已在本機 Edge 讀取原生搜尋頁。一般 HTTP 與普通無頭瀏覽器可能收到驗證頁；首頁能開啟不代表搜尋、排序、庫存與圖片皆可用。Linux GitHub runner 本次未能取得搜尋頁；Check workflow 的 `surugaya_probe` 改用 Windows／Edge，驗證搜尋與公開圖片。通過前不要假設 GitHub 雲端也能連線。
 
 監聽「更新的商品」，不等同首次上市；只處理本次載入的搜尋頁。網站的「品切れ OFF」仍可能包含本店缺貨但其他賣家有貨的商品，因此程式另外確認本店新品／中古售價，略過第三方獨有商品與預約品。不將定價、運費門檻、手續費或第三方最低價當作本店售價。區間價標示「起」，不同分支品況與新品／中古使用不同 ID；它們仍需人工核對內容。尚未驗證的限時特價版型會回報來源失敗，保留既有紀錄。
 

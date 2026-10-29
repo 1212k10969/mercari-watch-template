@@ -130,6 +130,22 @@ class MonitorTests(unittest.TestCase):
             send.assert_not_called()
         self.assertEqual(json.loads(self.seen_path.read_text())["sample"], ["one"])
 
+    def test_selected_source_preserves_other_source_history_and_health(self):
+        self.write_watches([watch(sources=["jp", "surugaya"])])
+        self.seen_path.write_text(json.dumps({
+            "sample": ["old"], "_baselines": ["sample:jp"],
+            "_health": {"fails": 0, "alerted": False, "sources": {"jp": {"fails": 2, "alerted": False}}},
+        }))
+        with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item()])) as search, patch.object(app, "notify") as send:
+            self.assertEqual(self.run_check(only_sources=["surugaya"]), 0)
+            self.assertEqual(search.call_count, 1)
+            self.assertEqual(search.call_args.args[1]["source"], "surugaya")
+            send.assert_not_called()
+        state = json.loads(self.seen_path.read_text())
+        self.assertIn("old", state["sample"])
+        self.assertEqual(state["_baselines"], ["sample:jp", "sample:surugaya"])
+        self.assertEqual(state["_health"]["sources"]["jp"]["fails"], 2)
+
     def test_notify_failure_keeps_old_state_then_success_advances_it(self):
         self.seen_path.write_text(json.dumps({"sample": ["one"]}))
         with patch.object(app, "Mercapi"), patch.object(app, "search_new", AsyncMock(return_value=[item(), item("two")])), patch.object(app, "notify", return_value=False):

@@ -14,7 +14,7 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.surugaya_probe && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -24,13 +24,10 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python -m unittest -q
-      - name: Install Japanese storefront browser
-        if: ${{ inputs.surugaya_probe }}
-        run: python -m patchright install --with-deps chrome
       - name: Verify Japanese storefront access
         if: ${{ inputs.surugaya_probe }}
+        shell: python
         run: |
-          xvfb-run -a python - <<'PY'
           import asyncio
           from surugaya_source import SurugayaSearch
           async def probe():
@@ -48,5 +45,4 @@ jobs:
                           raise RuntimeError('Public product image was not accessible')
                   print(f'Japanese storefront verified: {len(items)} direct offers')
           asyncio.run(probe())
-          PY
 
