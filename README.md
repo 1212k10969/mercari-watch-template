@@ -118,7 +118,7 @@ Yahoo 新增來源同樣首次只建立基準，不重播既有商品。搜尋�
 4. 在 Variables 設定 `MONITOR_ENABLED=true`，啟用每 30 分鐘檢查（每小時第 27、57 分）；設為 `false` 停止排程。GitHub 排程可能延遲。
 5. 從執行結果確認各來源的成功／失敗狀態；被拒絕、驗證頁或無法確認篩選條件，都視為搜尋失敗。
 
-是否自動啟動，請看 [自動排程執行紀錄](https://github.com/danny0926/mercari-watch-template/actions/workflows/monitor.yml?query=event%3Aschedule)，或執行 `gh run list --workflow monitor.yml --event schedule`。`schedule` 是排程事件，手動 Run workflow 會顯示 `workflow_dispatch`。設定了 cron、workflow 顯示 active 或手動執行成功，均不能證明自動排程已運作。來源異常警報須在程式實際啟動後才有機會發送，因此還需檢查排程紀錄的時間；沒有新品通知也不能單獨作為排程狀態依據。
+是否自動啟動，請看 [自動排程執行紀錄](https://github.com/danny0926/mercari-watch-template/actions/workflows/market-monitor.yml?query=event%3Aschedule)，或執行 `gh run list --workflow market-monitor.yml --event schedule`。`schedule` 是排程事件，手動 Run workflow 會顯示 `workflow_dispatch`。設定了 cron、workflow 顯示 active 或手動執行成功，均不能證明自動排程已運作。來源異常警報須在程式實際啟動後才有機會發送，因此還需檢查排程紀錄的時間；沒有新品通知也不能單獨作為排程狀態依據。
 
 去重紀錄只以 Fernet 加密檔存入 Actions Cache，金鑰保存在 Secrets；工作流程不再提交 `seen.json`。快取可能遭清除，缺少紀錄時會重新建立基準，不將現有商品整批推送。請保留加密金鑰，變更金鑰前需先清除舊加密紀錄。
 
