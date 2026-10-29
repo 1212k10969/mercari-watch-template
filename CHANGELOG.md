@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3
+
+- Support verified Mercari Shops identities on Buyee's native Mercari item route.
+- Use Buyee for primary Discord and LINE links while retaining original item identities and history.
+- Keep region-sensitive original URLs as copyable text in Buyee mode, with plain source labels, to avoid ambiguous direct-source links.
+- Reject mismatched Shops IDs and external source URLs instead of guessing a proxy destination.
+
 ## 0.4.2
 
 - Forward an optional third independent Discord destination to source jobs, connection tests and clock alerts.

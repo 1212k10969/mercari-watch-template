@@ -35,7 +35,7 @@ from yahoo_sources import YahooSearch
 from surugaya_source import SurugayaSearch
 
 BASE = Path(__file__).parent
-VERSION = "0.4.2"
+VERSION = "0.4.3"
 WATCHLIST = BASE / "watchlist.json"
 SEEN = BASE / "seen.json"
 SEEN_KEEP = 500          # 每組條件最多記住幾個 ID
@@ -192,13 +192,33 @@ def mercari_link_mode() -> str:
     return mode
 
 
+def mercari_proxy_id(x: dict) -> str | None:
+    """Only map identities supported by a matching Mercari listing URL."""
+    identity = x.get("item_id", "")
+    if not isinstance(identity, str):
+        return None
+    links = x.get("links") or {"item": x["url"]}
+    urls = [urlparse(url) for url in links.values()]
+    if re.fullmatch(r"m\d+", identity) and any(
+            url.scheme == "https" and ((url.hostname == "jp.mercari.com" and url.path == "/item/" + identity)
+            or (url.hostname == "tw.mercari.com" and url.path.startswith("/zh-hant/items/"))) for url in urls):
+        return identity
+    if identity.startswith("shops:"):
+        shop_id = identity[6:]
+        if re.fullmatch(r"[A-Za-z0-9]{22}", shop_id) and any(
+                url.scheme == "https" and url.hostname == "jp.mercari.com"
+                and url.path == "/shops/product/" + shop_id for url in urls):
+            return shop_id
+    return None
+
+
 def notification_links(x: dict) -> dict:
     links = dict(x.get("links") or {"item": x["url"]})
-    identity = x.get("item_id", "")
-    if isinstance(identity, str) and re.fullmatch(r"m\d+", identity) and any(
-            urlparse(url).hostname in ("jp.mercari.com", "tw.mercari.com") for url in links.values()):
-        # Official Mercari item pages link to this same Buyee item route.
-        links.setdefault("jp", "https://jp.mercari.com/item/" + identity)
+    identity = mercari_proxy_id(x)
+    if identity:
+        # Buyee's native Shops search links use this same route with a 22-character ID.
+        path = "/shops/product/" if x["item_id"].startswith("shops:") else "/item/"
+        links.setdefault("jp", "https://jp.mercari.com" + path + identity)
         links["buyee"] = "https://buyee.jp/mercari/item/" + identity
         if mercari_link_mode() == "buyee":
             links = {"buyee": links.pop("buyee"), **links}
@@ -333,7 +353,16 @@ def build_discord_messages(items: list[dict]) -> list[dict]:
     for x in items:
         links = notification_links(x)
         labels = {**SOURCE_LABELS, "item": "查看商品", "buyee": "Buyee 商品頁"}
-        link_text = " · ".join(f"[{labels.get(source, '查看商品')}]({url})" for source, url in links.items())
+        proxy_mode = mercari_link_mode() == "buyee" and "buyee" in links
+        originals = {source: url for source, url in links.items()
+                     if urlparse(url).hostname in ("jp.mercari.com", "tw.mercari.com")}
+        displayed = {source: url for source, url in links.items() if not proxy_mode or source not in originals}
+        link_text = " · ".join(f"[{labels.get(source, '查看商品')}]({url})" for source, url in displayed.items())
+        if proxy_mode:
+            source_names = list(dict.fromkeys(
+                "Mercari Shops 日本站" if source == "jp" and x["item_id"].startswith("shops:") else labels.get(source, "Mercari")
+                for source in originals))
+            link_text += "\n來源：" + "／".join(source_names)
         description = "\n".join(filter(None, [str(x["watch"]), str(x.get("review_note") or ""), str(x.get("price_note") or "")]))
         description = description[:max(0, 4096 - len(link_text) - 2)] + "\n\n" + link_text
         embed = {
@@ -347,7 +376,14 @@ def build_discord_messages(items: list[dict]) -> list[dict]:
         if not embed["description"]:
             del embed["description"]
         if "buyee" in links:
-            embed["fields"].append({"name": "日本商品編號", "value": str(x["item_id"]), "inline": True})
+            shop = str(x["item_id"]).startswith("shops:")
+            embed["fields"].append({"name": "Shops 商品編號" if shop else "日本商品編號",
+                                    "value": mercari_proxy_id(x), "inline": True})
+        if proxy_mode:
+            copied = list(dict.fromkeys(originals.values()))
+            embed["fields"].append({"name": "原站網址（僅供複製，可能轉區）",
+                                    "value": "\n".join("`" + url.replace("`", "%60").replace("\n", "") + "`" for url in copied),
+                                    "inline": False})
         if x["is_auction"]:
             embed["fields"].append({"name": "截止（台灣時間）",
                                      "value": x.get("bid_deadline") or "未提供", "inline": True})

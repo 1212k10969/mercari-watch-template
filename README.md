@@ -93,7 +93,7 @@ python -m unittest -q
 
 商品圖片由商品來源提供；缺少圖片時仍保留名稱與連結。兩站皆找到相同商品時合併連結。台灣站以新台幣顯示，日本站以日圓顯示，不自行推算匯率。圖片與商品內容需自行核對。
 
-Mercari 原站可能因瀏覽器、帳號或 App 開啟方式轉往當地入口。若使用 Buyee，可在 `.env` 與 GitHub 同名 Secret 設定 `MERCARI_LINK_MODE=buyee`，讓 Discord 商品標題與 LINE 查看按鈕直接開啟 Buyee；通知也保留日本原始連結與可複製的日本商品編號。這會選擇另一個商品入口，並不更改 Mercari 的地區設定。Yahoo、Mercari Shops 或無法取得日本原始編號的商品維持原連結；去重紀錄不受影響。
+Mercari 原站可能因瀏覽器、帳號或 App 開啟方式轉往當地入口。若使用 Buyee，可在 `.env` 與 GitHub 同名 Secret 設定 `MERCARI_LINK_MODE=buyee`，讓 Discord 商品標題、Buyee 商品頁連結與 LINE 查看按鈕直接開啟 Buyee。一般商品與具有對應日本原始網址的 Mercari Shops 商品均支援；Shops 使用經原站網址核對的 22 字元商品編號。Discord 的 Buyee 模式將原站網址放在可複製的文字欄位，來源標籤使用純文字，避免誤點原站後再度轉區。商品編號與原始來源資料保留，去重紀錄不受影響。這會選擇另一個商品入口，並不更改 Mercari 的地區設定。Yahoo 或無法確認原始商品編號的項目維持原連結；無法核對的 Shops ID 不猜測轉換。
 
 `tw.mercari.com` 是跨境商品入口，並非台灣本地現貨市場；其台幣標價不能視為已包含全部跨境費用的到手價。不同賣家刊登同款商品仍分別通知，不以名稱相似判定同一件貨品。
 

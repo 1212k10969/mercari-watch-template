@@ -545,8 +545,9 @@ class MonitorTests(unittest.TestCase):
             expected = "https://buyee.jp/mercari/item/m100"
             embed = app.build_discord_messages([rec])[0]["embeds"][0]
             self.assertEqual(embed["url"], expected)
-            self.assertLess(embed["description"].index("Buyee"), embed["description"].index("Mercari"))
-            self.assertIn(original, embed["description"])
+            self.assertIn("[Buyee 商品頁]", embed["description"])
+            self.assertNotIn(original, embed["description"])
+            self.assertIn({"name": "原站網址（僅供複製，可能轉區）", "value": "`" + original + "`", "inline": False}, embed["fields"])
             self.assertIn({"name": "日本商品編號", "value": "m100", "inline": True}, embed["fields"])
             card = app.bubble(rec)
             self.assertEqual(card["footer"]["contents"][0]["action"]["uri"], expected)
@@ -555,6 +556,35 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(rec["url"], original)
         self.assertEqual(rec["links"], {"jp": original})
         self.assertEqual(app.notification_url(rec), original)
+
+    def test_shops_links_use_verified_buyee_route_and_copyable_original(self):
+        identity = "AbCdEfGh1234567890JKLM"
+        original = "https://jp.mercari.com/shops/product/" + identity
+        rec = app.to_record(item(identity, item_type="ITEM_TYPE_BEYOND", thumbnails=["https://example.org/photo.jpg"]), watch())
+        with patch.dict(os.environ, {"MERCARI_LINK_MODE": "buyee"}):
+            expected = "https://buyee.jp/mercari/item/" + identity
+            embed = app.build_discord_messages([rec])[0]["embeds"][0]
+            self.assertEqual(embed["url"], expected)
+            self.assertIn("Mercari Shops 日本站", embed["description"])
+            self.assertNotIn(original, embed["description"])
+            self.assertIn({"name": "Shops 商品編號", "value": identity, "inline": True}, embed["fields"])
+            self.assertIn({"name": "原站網址（僅供複製，可能轉區）", "value": "`" + original + "`", "inline": False}, embed["fields"])
+            self.assertEqual(app.bubble(rec)["footer"]["contents"][0]["action"]["uri"], expected)
+            self.assertEqual(app.bubble(rec)["hero"]["action"]["uri"], expected)
+        self.assertEqual(rec["item_id"], "shops:" + identity)
+        self.assertEqual(rec["url"], original)
+        self.assertEqual(rec["links"], {"jp": original})
+        self.assertEqual(app.notification_url(rec), original)
+
+    def test_shops_mapping_rejects_mismatched_or_external_source_urls(self):
+        identity = "AbCdEfGh1234567890JKLM"
+        for url in ("https://example.org/shops/product/" + identity,
+                    "https://jp.mercari.com/shops/product/XbCdEfGh1234567890JKLM",
+                    "http://jp.mercari.com/shops/product/" + identity):
+            with self.subTest(url=url), patch.dict(os.environ, {"MERCARI_LINK_MODE": "buyee"}):
+                rec = app.to_record(item(identity, item_type="ITEM_TYPE_BEYOND", url=url), watch())
+                self.assertEqual(app.notification_url(rec), url)
+                self.assertNotIn("buyee", app.notification_links(rec))
 
     def test_buyee_mode_requires_verified_mercari_identity(self):
         with patch.dict(os.environ, {"MERCARI_LINK_MODE": "buyee"}):
